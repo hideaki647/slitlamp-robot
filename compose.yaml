@@ -1,0 +1,15 @@
+services:
+  sim:
+    build:
+      context: .
+    image: slitlamp-robot:local
+    init: true
+    working_dir: /workspace
+    volumes:
+      # Windows側のこのフォルダを、コンテナ内の /workspace として見せる
+      - .:/workspace
+    environment:
+      # scripts/ から sim/ などのフォルダを import できるようにする
+      PYTHONPATH: /workspace
+      MUJOCO_GL: ${MUJOCO_GL:-egl}
+      PYOPENGL_PLATFORM: ${MUJOCO_GL:-egl}

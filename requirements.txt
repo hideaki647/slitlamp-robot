@@ -1,0 +1,6 @@
+mujoco==3.15.0
+numpy>=2.0,<2.3
+opencv-python-headless>=4.10,<5
+imageio>=2.37,<3
+imageio-ffmpeg>=0.6,<1
+matplotlib>=3.10,<4

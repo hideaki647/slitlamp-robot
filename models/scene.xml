@@ -1,0 +1,188 @@
+<!--
+  細隙灯アライメント シーン（M0：配置、M1：連動拘束・アーム）
+  座標系：x = 右(+)/左(-)（検者から見て）、y = 奥（患者側）、z = 上。単位は m。
+  患者は y=+0.32 に座り、-y 方向（検者側）を向いている。
+-->
+<mujoco model="slitlamp_scene">
+  <compiler angle="degree"/>
+  <option timestep="0.002" gravity="0 0 -9.81">
+    <!-- 衝突判定は使わない（握る動作は weld 拘束で表すため）。計算が速く安定する -->
+    <flag contact="disable"/>
+  </option>
+
+  <default>
+    <!-- 拘束の硬さ：solref の1つ目（時定数）が小さいほど硬い。timestep の2倍(0.004)が下限の目安 -->
+    <equality solref="0.004 1"/>
+    <!-- アーム用の既定値：関節の粘り・見かけの慣性、位置制御モーターの強さ(kp)と減衰(kv) -->
+    <default class="arm">
+      <joint damping="1" armature="0.01"/>
+      <geom material="arm_mat"/>
+      <!-- 反応の速さの目安は kv/kp [s]。M1 は 150/15（0.1秒）で遅れが目立ったため、M2 で 250/6 に変更 -->
+      <position kp="250" kv="6"/>
+    </default>
+  </default>
+
+  <visual>
+    <!-- 画面なし描画（オフスクリーン）の最大解像度 -->
+    <global offwidth="1280" offheight="960"/>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.4 0.4 0.4"/>
+  </visual>
+
+  <asset>
+    <texture name="sky" type="skybox" builtin="gradient" rgb1="0.85 0.9 0.95" rgb2="0.4 0.5 0.6" width="256" height="256"/>
+    <texture name="floor_tex" type="2d" builtin="checker" rgb1="0.75 0.75 0.75" rgb2="0.6 0.6 0.6" width="256" height="256"/>
+    <material name="floor_mat" texture="floor_tex" texrepeat="8 8"/>
+    <material name="table_mat"  rgba="0.55 0.42 0.3 1"/>
+    <material name="lamp_mat"   rgba="0.92 0.92 0.9 1"/>
+    <material name="metal_mat"  rgba="0.45 0.45 0.5 1"/>
+    <material name="black_mat"  rgba="0.08 0.08 0.08 1"/>
+    <material name="skin_mat"   rgba="0.93 0.76 0.65 1"/>
+    <material name="sclera_mat" rgba="0.97 0.96 0.94 1"/>
+    <material name="iris_mat"   rgba="0.40 0.25 0.12 1"/>
+    <material name="pupil_mat"  rgba="0.02 0.02 0.02 1"/>
+    <material name="arm_mat"    rgba="0.95 0.55 0.15 1"/>
+    <material name="arm_dark"   rgba="0.25 0.25 0.28 1"/>
+  </asset>
+
+  <worldbody>
+    <light name="room_light" pos="0 -0.5 2.5" dir="0 0.3 -1" diffuse="0.6 0.6 0.6"/>
+    <geom name="floor" type="plane" size="2 2 0.1" material="floor_mat"/>
+
+    <!-- 診察台：天板の上面が z=0.75 -->
+    <body name="table" pos="0 0.05 0">
+      <geom name="table_top" type="box" pos="0 0 0.73" size="0.40 0.35 0.02" material="table_mat"/>
+      <geom name="table_leg" type="box" pos="0 0 0.355" size="0.30 0.25 0.355" material="table_mat"/>
+    </body>
+
+    <!-- ===== 細隙灯 ===== -->
+    <!-- 基台：左右(x)・前後(y)にスライドする -->
+    <body name="lamp_base" pos="0 -0.10 0.75">
+      <joint name="lamp_x" type="slide" axis="1 0 0" range="-0.07 0.07" damping="50"/>
+      <joint name="lamp_y" type="slide" axis="0 1 0" range="-0.04 0.04" damping="50"/>
+      <geom name="base_plate" type="box" pos="0 -0.02 0.02" size="0.12 0.10 0.02" material="lamp_mat"/>
+
+      <!-- ジョイスティック：基台の手前（検者側）に立つ。3つの回転関節 -->
+      <body name="joystick" pos="0 -0.09 0.04">
+        <!-- armature：関節に見かけの慣性を足す。軽いスティックと重い本体を拘束でつなぐときの計算を安定させる -->
+        <joint name="js_pitch" type="hinge" axis="1 0 0" range="-20 20" damping="0.5" armature="0.05"/>  <!-- 前後に倒す -->
+        <joint name="js_roll"  type="hinge" axis="0 1 0" range="-25 25" damping="0.5" armature="0.05"/>  <!-- 左右に倒す -->
+        <joint name="js_spin"  type="hinge" axis="0 0 1" range="-360 360" damping="0.5" armature="0.05"/> <!-- 軸回転＝高さ -->
+        <geom name="js_shaft" type="capsule" fromto="0 0 0 0 0 0.10" size="0.006" material="metal_mat"/>
+        <geom name="js_knob"  type="sphere" pos="0 0 0.11" size="0.016" material="black_mat"/>
+        <site name="js_grip" pos="0 0 0.11" size="0.005"/>
+      </body>
+
+      <!-- 支柱：上下(z)にスライドする＝高さ調整 -->
+      <!-- gravcomp="1"：この部品の重さを打ち消す（実機の高さ調整ネジが自重を支えるのに相当） -->
+      <body name="lamp_column" pos="0 0 0.04" gravcomp="1">
+        <joint name="lamp_z" type="slide" axis="0 0 1" range="-0.03 0.03" damping="50"/>
+        <geom name="column" type="cylinder" fromto="0 0 0 0 0 0.26" size="0.018" material="lamp_mat"/>
+
+        <!-- 鏡筒：患者の方(+y)を向く。光軸の高さ z=0.75+0.04+0.26=1.05 -->
+        <body name="microscope" pos="0 0 0.26" gravcomp="1">
+          <geom name="scope_tube" type="cylinder" fromto="0 -0.06 0 0 0.12 0" size="0.025" material="lamp_mat"/>
+          <geom name="eyepiece_L" type="cylinder" fromto="-0.016 -0.06 0.01 -0.016 -0.10 0.03" size="0.008" material="black_mat"/>
+          <geom name="eyepiece_R" type="cylinder" fromto=" 0.016 -0.06 0.01  0.016 -0.10 0.03" size="0.008" material="black_mat"/>
+          <!-- 細隙灯カメラ：対物レンズ位置から +y を見る（カメラは自分の -z 方向を見るため xyaxes で向きを指定） -->
+          <camera name="slit_cam" pos="0 0.125 0" xyaxes="1 0 0 0 0 1" fovy="15"/>
+          <!-- 細隙光：斜めから当てるスポットライト -->
+          <body name="illum_arm" pos="0.06 0.02 0.05" gravcomp="1">
+            <geom name="illum_tube" type="cylinder" fromto="0 0 0 0 0 0.10" size="0.012" material="lamp_mat"/>
+            <!-- 光源から眼まで y方向に約0.3m、x に -0.06m、z に -0.05m ずれているので、その方向へ向ける -->
+            <light name="slit_light" pos="0 0.02 0" dir="-0.2 1 -0.17" directional="false" castshadow="false"
+                   cutoff="6" exponent="10" diffuse="0.4 0.4 0.35" attenuation="1 0 0"/>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- ===== 患者側 ===== -->
+    <!-- 顎台：左右の支柱、顎受け、額当て -->
+    <body name="chinrest" pos="0 0.27 0.75">
+      <geom name="cr_pole_L" type="cylinder" fromto="-0.13 0 0 -0.13 0 0.45" size="0.008" material="metal_mat"/>
+      <geom name="cr_pole_R" type="cylinder" fromto=" 0.13 0 0  0.13 0 0.45" size="0.008" material="metal_mat"/>
+      <geom name="chin_cup"  type="box" pos="0 0.03 0.20" size="0.04 0.03 0.008" material="black_mat"/>
+      <geom name="forehead"  type="cylinder" fromto="-0.13 0.0 0.40 0.13 0.0 0.40" size="0.01" material="black_mat"/>
+    </body>
+
+    <!-- 頭部：楕円体。眼の高さ z=1.05（鏡筒の光軸と同じ高さ） -->
+    <body name="head" pos="0 0.32 1.05">
+      <geom name="skull" type="ellipsoid" size="0.075 0.09 0.11" pos="0 0 0.02" material="skin_mat"/>
+      <!-- 患者は -y を向いているので、患者の右眼は x<0 側 -->
+      <body name="eye_R" pos="-0.032 -0.085 0">
+        <geom name="eyeball_R" type="sphere" size="0.012" material="sclera_mat"/>
+        <!-- 円柱はz軸向きが既定なので、x軸まわりに90°回して y 方向へ向ける -->
+        <!-- 球面(半径12mm)より手前に置かないと、球が虹彩を突き抜けて見える -->
+        <geom name="iris_R"  type="cylinder" pos="0 -0.0122 0" euler="90 0 0" size="0.006 0.0004" material="iris_mat"/>
+        <geom name="pupil_R" type="cylinder" pos="0 -0.0127 0" euler="90 0 0" size="0.0025 0.0002" material="pupil_mat"/>
+        <site name="pupil_R_center" pos="0 -0.013 0" size="0.001"/>
+      </body>
+      <body name="eye_L" pos="0.032 -0.085 0">
+        <geom name="eyeball_L" type="sphere" size="0.012" material="sclera_mat"/>
+        <geom name="iris_L"  type="cylinder" pos="0 -0.0122 0" euler="90 0 0" size="0.006 0.0004" material="iris_mat"/>
+        <geom name="pupil_L" type="cylinder" pos="0 -0.0127 0" euler="90 0 0" size="0.0025 0.0002" material="pupil_mat"/>
+        <site name="pupil_L_center" pos="0 -0.013 0" size="0.001"/>
+      </body>
+    </body>
+
+    <!-- ===== ロボットアーム（医師の席側）=====
+         6関節：土台旋回・肩・肘・手首（曲げ・横曲げ・回転）。gravcomp で自重を打ち消す。
+         全関節を伸ばすと真上を向く姿勢が 0°。 -->
+    <body name="arm_base" pos="0 -0.45 0" childclass="arm">
+      <geom name="pedestal" type="cylinder" fromto="0 0 0 0 0 0.75" size="0.05" material="arm_dark"/>
+      <body name="arm_link0" pos="0 0 0.75" gravcomp="1">
+        <joint name="a_yaw" axis="0 0 1" range="-90 90"/>
+        <geom name="arm_g0" type="cylinder" fromto="0 0 0 0 0 0.10" size="0.04"/>
+        <body name="arm_upper" pos="0 0 0.10" gravcomp="1">
+          <joint name="a_shoulder" axis="1 0 0" range="-120 120"/>
+          <geom name="arm_g1" type="capsule" fromto="0 0 0 0 0 0.20" size="0.025"/>
+          <body name="arm_fore" pos="0 0 0.20" gravcomp="1">
+            <joint name="a_elbow" axis="1 0 0" range="-160 160"/>
+            <geom name="arm_g2" type="capsule" fromto="0 0 0 0 0 0.20" size="0.02"/>
+            <!-- 手首：曲げ(x軸)・横曲げ(y軸)・回転(z軸)の3軸が1点で交わる（人の手首と同じ） -->
+            <body name="arm_wrist" pos="0 0 0.20" gravcomp="1">
+              <joint name="a_wrist_pitch" axis="1 0 0" range="-150 150"/>
+              <joint name="a_wrist_dev"   axis="0 1 0" range="-60 60"/>
+              <geom name="arm_g3" type="sphere" size="0.022" material="arm_dark"/>
+              <body name="hand" gravcomp="1">
+                <joint name="a_wrist_roll" axis="0 0 1" range="-360 360"/>
+                <geom name="palm"     type="cylinder" fromto="0 0 0.01 0 0 0.05" size="0.018"/>
+                <geom name="finger_a" type="box" pos=" 0.022 0 0.075" size="0.004 0.012 0.025" material="arm_dark"/>
+                <geom name="finger_b" type="box" pos="-0.022 0 0.075" size="0.004 0.012 0.025" material="arm_dark"/>
+                <!-- 握る点：2本の指の間。ここをノブの中心に重ねる -->
+                <site name="grip" pos="0 0 0.08" size="0.004"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- 俯瞰カメラ：斜め上から全体を見る（動画の左画面用） -->
+    <body name="view_target" pos="0 0.05 0.95"/>
+    <camera name="overview" mode="targetbody" target="view_target" pos="0.75 -0.55 1.35"/>
+  </worldbody>
+
+  <!-- ===== 連動拘束（M1）：ジョイスティックの角度 → 本体の位置 =====
+       joint1 = c0 + c1*joint2 （polycoef の 1番目と2番目だけ使う一次式）
+       符号：js_roll を + に回すとノブは +x（右）へ倒れる → 本体も右へ
+             js_pitch を + に回すとノブは -y（手前）へ倒れる → 奥(+y)へ押すのは − なので符号を反転
+             js_spin を + に回す（上から見て反時計回り）→ 鏡筒が上がる。半回転(π rad)で10mm -->
+  <equality>
+    <joint name="link_x" joint1="lamp_x" joint2="js_roll"  polycoef="0  0.15    0 0 0"/>
+    <joint name="link_y" joint1="lamp_y" joint2="js_pitch" polycoef="0 -0.15    0 0 0"/>
+    <joint name="link_z" joint1="lamp_z" joint2="js_spin"  polycoef="0  0.00318 0 0 0"/>
+    <!-- 把持：手とジョイスティックを溶接（最初は OFF。握る姿勢を作ってからプログラムで ON にする） -->
+    <weld name="grasp" body1="hand" body2="joystick" active="false" solref="0.01 1"/>
+  </equality>
+
+  <!-- アームの各関節に「この角度へ行け」と指示する位置制御モーター -->
+  <actuator>
+    <position name="m_yaw"         joint="a_yaw"         class="arm"/>
+    <position name="m_shoulder"    joint="a_shoulder"    class="arm"/>
+    <position name="m_elbow"       joint="a_elbow"       class="arm"/>
+    <position name="m_wrist_pitch" joint="a_wrist_pitch" class="arm"/>
+    <position name="m_wrist_dev"   joint="a_wrist_dev"   class="arm"/>
+    <position name="m_wrist_roll"  joint="a_wrist_roll"  class="arm"/>
+  </actuator>
+</mujoco>

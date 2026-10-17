@@ -1,0 +1,4 @@
+outputs/
+data/
+report/
+**/__pycache__/

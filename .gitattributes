@@ -1,0 +1,6 @@
+# Docker (Linux) で動かすので、改行は LF にそろえる
+* text=auto eol=lf
+*.png binary
+*.mp4 binary
+*.npz binary
+*.pt binary

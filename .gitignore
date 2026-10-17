@@ -1,0 +1,11 @@
+# 大きなデータ・学習済みモデルは GitHub に上げない（再生成できる）
+data/
+checkpoints/
+**/__pycache__/
+MUJOCO_LOG.TXT
+outputs/_check.png
+
+# 学習のログ（PowerShell の出力で、手元のパスが混ざることがある）
+outputs/_*.log
+# 動画は容量が大きく、作り直すたびに履歴が膨らむ（提出動画は YouTube に置く）
+*.mp4

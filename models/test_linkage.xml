@@ -1,0 +1,10 @@
+<!-- M1 Step1 専用：scene.xml にジョイスティックを直接動かす仮モーターを足したもの。
+     アームを使わずに「傾けたら本体が動くか」だけを確かめる。 -->
+<mujoco model="test_linkage">
+  <include file="scene.xml"/>
+  <actuator>
+    <position name="test_roll"  joint="js_roll"  kp="20" kv="2"/>
+    <position name="test_pitch" joint="js_pitch" kp="20" kv="2"/>
+    <position name="test_spin"  joint="js_spin"  kp="20" kv="2"/>
+  </actuator>
+</mujoco>

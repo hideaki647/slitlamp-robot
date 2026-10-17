@@ -1,0 +1,45 @@
+[
+ {
+  "round": 0,
+  "frames": 36000,
+  "success_rate": 1.0,
+  "converge_time_s_mean": 0.43599999999999994,
+  "final_error_mm_mean": 0.07202327248894703
+ },
+ {
+  "round": 1,
+  "frames": 51000,
+  "collect_aligned_rate": 0.98,
+  "success_rate": 1.0,
+  "converge_time_s_mean": 0.43799999999999994,
+  "final_error_mm_mean": 0.05934823087059394,
+  "seconds": 665
+ },
+ {
+  "round": 2,
+  "frames": 66000,
+  "collect_aligned_rate": 0.97,
+  "success_rate": 1.0,
+  "converge_time_s_mean": 0.43799999999999994,
+  "final_error_mm_mean": 0.0550546697532428,
+  "seconds": 835
+ },
+ {
+  "round": 3,
+  "frames": 81000,
+  "collect_aligned_rate": 0.966,
+  "success_rate": 1.0,
+  "converge_time_s_mean": 0.436,
+  "final_error_mm_mean": 0.05136068561397449,
+  "seconds": 939
+ },
+ {
+  "round": 4,
+  "frames": 96000,
+  "collect_aligned_rate": 0.982,
+  "success_rate": 1.0,
+  "converge_time_s_mean": 0.44,
+  "final_error_mm_mean": 0.04386313099065018,
+  "seconds": 1081
+ }
+]
