@@ -22,6 +22,9 @@ EVAL_SEED0 = 10_000  # 学習データ（seed 0〜）と重ならない番号
 def load_policy(name):
     if name == "expert":
         return expert_action
+    if name in ("modular", "modular_raw"):
+        from policies.modular import ModularPolicy
+        return ModularPolicy(calibrate=(name == "modular"))
     if name.startswith("student:"):
         from learning.model import StudentPolicy
         return StudentPolicy(ROOT / name.split(":", 1)[1])
@@ -54,6 +57,8 @@ def main():
         "final_error_mm_mean": float(np.mean([r["final_error_mm"] for r in results])),
         "initial_error_mm_mean": float(np.mean([r["initial_error_mm"] for r in results])),
     }
+    if hasattr(policy, "misses"):  # モジュール型：瞳孔を見つけられなかった割合
+        summary["detect_miss_rate"] = policy.misses / max(policy.calls, 1)
     for k, v in summary.items():
         print(f"{k:<24}{v:.3f}" if isinstance(v, float) else f"{k:<24}{v}")
     failed = [r["seed"] for r in results if not r["success"]]

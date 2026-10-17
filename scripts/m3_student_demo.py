@@ -29,13 +29,20 @@ def main():
     p.add_argument("--ckpt", default="checkpoints/dagger_r4.pt")
     p.add_argument("--name", default="STUDENT (camera image only, BC+DAgger)")
     p.add_argument("--out", default="outputs/m3_student_demo.mp4")
+    p.add_argument("--policy", default=None, help="eval_policy.py と同じ書き方（例：modular）。指定すると --ckpt より優先")
+    p.add_argument("--eye", default="R", choices=["R", "L"])
+    p.add_argument("--episodes", type=int, default=N_EPISODES)
     args = p.parse_args()
 
     evals = json.loads((OUT / "eval_expert.json").read_text())["episodes"]
-    seeds = [e["seed"] for e in sorted(evals, key=lambda e: -e["initial_error_mm"])[:N_EPISODES]]
+    seeds = [e["seed"] for e in sorted(evals, key=lambda e: -e["initial_error_mm"])[:args.episodes]]
 
-    student = StudentPolicy(ROOT / args.ckpt)
-    env = SlitLampEnv()
+    if args.policy:
+        from scripts.eval_policy import load_policy
+        student = load_policy(args.policy)
+    else:
+        student = StudentPolicy(ROOT / args.ckpt)
+    env = SlitLampEnv(target_eye=args.eye)
     m = env.model
     renderer = mujoco.Renderer(m, height=H, width=W)
     view = free_camera([0.0, -0.05, 0.95], 1.2, 140, -25)
