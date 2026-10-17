@@ -38,9 +38,16 @@ def main():
     p.add_argument("--tag", default=None, help="結果ファイル outputs/eval_<tag>.json の名前")
     p.add_argument("--condition", default="normal", choices=CONDITIONS, help="汎化テストの条件")
     p.add_argument("--eye", default="R", choices=["R", "L"], help="合わせる眼（患者の右眼 R／左眼 L）")
+    # 実機の不完全さ（M4-G）。既定はすべて「なし」
+    p.add_argument("--delay", type=int, default=0, help="観測の遅れ [ステップ=0.1秒]")
+    p.add_argument("--act_noise", type=float, default=0.0, help="指令のばらつき [mm]")
+    p.add_argument("--kp_scale", type=float, default=1.0, help="モーターの強さの倍率")
+    p.add_argument("--img_noise", type=float, default=0.0, help="画像のノイズ（0〜1）")
+    p.add_argument("--blur", type=float, default=0.0, help="画像のぼけ [画素]")
     args = p.parse_args()
 
-    env = SlitLampEnv(condition=args.condition, target_eye=args.eye)
+    disturb = {k: getattr(args, k) for k in ("delay", "act_noise", "kp_scale", "img_noise", "blur")}
+    env = SlitLampEnv(condition=args.condition, target_eye=args.eye, disturb=disturb)
     policy = load_policy(args.policy)
     results = [run_episode(env, policy, EVAL_SEED0 + i) for i in range(args.n)]
     env.close()
@@ -50,12 +57,18 @@ def main():
         "policy": args.policy,
         "condition": args.condition,
         "eye": args.eye,
+        "disturb": disturb,
         "episodes": args.n,
         "success_rate": len(ok) / args.n,
         "converge_time_s_mean": float(np.mean([r["converge_time_s"] for r in ok])) if ok else None,
         "converge_time_s_max": float(np.max([r["converge_time_s"] for r in ok])) if ok else None,
         "final_error_mm_mean": float(np.mean([r["final_error_mm"] for r in results])),
         "initial_error_mm_mean": float(np.mean([r["initial_error_mm"] for r in results])),
+        # 合った後の最大のずれ（一度でも1mm以内に入った回の平均・最大）、振動の回数の平均（M4-G）
+        "post_align_max_mm_mean": float(np.mean(pm)) if (pm := [r["post_align_max_mm"] for r in results
+                                                               if r["post_align_max_mm"] is not None]) else None,
+        "post_align_max_mm_max": float(np.max(pm)) if pm else None,
+        "oscillations_mean": float(np.mean([r["oscillations"] for r in results])),
     }
     if hasattr(policy, "misses"):  # モジュール型：瞳孔を見つけられなかった割合
         summary["detect_miss_rate"] = policy.misses / max(policy.calls, 1)

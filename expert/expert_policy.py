@@ -13,5 +13,6 @@ GAIN = 0.5
 
 
 def expert_action(obs, env):
-    """obs（画像）は使わず、env の特権情報からずれを読んで指令 (Δx, Δz)[mm] を返す。"""
-    return np.clip(GAIN * env.error_mm(), -MAX_STEP_MM, MAX_STEP_MM)
+    """obs（画像）は使わず、env の特権情報からずれを読んで指令 (Δx, Δz)[mm] を返す。
+    観測の遅れ（M4-G）があるときは、生徒と同じく遅れたずれを使う（遅れが無ければ今のずれと同じ）。"""
+    return np.clip(GAIN * env.observed_error_mm(), -MAX_STEP_MM, MAX_STEP_MM)

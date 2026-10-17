@@ -17,9 +17,11 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
     initial = float(np.linalg.norm(env.error_mm()))
     images, actions, errors = [], [], []
     converged_at, hold = None, 0
+    path = []   # 各ステップのずれ（振動・行き過ぎの計算用、M4-G）
 
     for t in range(max_steps):
         err = env.error_mm()
+        path.append(err)
         if np.linalg.norm(err) < SUCCESS_MM:
             hold += 1
             if converged_at is None:
@@ -38,8 +40,18 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
         obs = env.step(executed, on_substep=on_substep)
 
     final = env.error_mm()
+    path.append(final)
     min_err = min(np.linalg.norm(e) for e in errors) if record and errors else None
+    # 合った後の最大のずれ：一度 1mm 以内に入ったあと、どこまで離れたか（行き過ぎ・ふらつき、安全性の目安）
+    norms = np.linalg.norm(np.array(path), axis=1)
+    inside = np.nonzero(norms < SUCCESS_MM)[0]
+    post_max = float(norms[inside[0] + 1:].max()) if len(inside) and inside[0] + 1 < len(norms) else None
+    # 振動の回数：左右のずれの向きが入れ替わった回数（0.2mm 未満の小さな揺れは数えない）
+    xs = [p[0] for p in path if abs(p[0]) >= 0.2]
+    oscillations = int(sum(np.sign(a) != np.sign(b) for a, b in zip(xs, xs[1:])))
     result = {
+        "post_align_max_mm": post_max,
+        "oscillations": oscillations,
         "min_error_mm": min_err,
         "seed": seed,
         "success": hold >= hold_steps,

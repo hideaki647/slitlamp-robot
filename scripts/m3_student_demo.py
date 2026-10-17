@@ -32,6 +32,7 @@ def main():
     p.add_argument("--policy", default=None, help="eval_policy.py と同じ書き方（例：modular）。指定すると --ckpt より優先")
     p.add_argument("--eye", default="R", choices=["R", "L"])
     p.add_argument("--episodes", type=int, default=N_EPISODES)
+    p.add_argument("--delay", type=int, default=0, help="観測の遅れ [ステップ=0.1秒]（M4-G）")
     args = p.parse_args()
 
     evals = json.loads((OUT / "eval_expert.json").read_text())["episodes"]
@@ -42,7 +43,7 @@ def main():
         student = load_policy(args.policy)
     else:
         student = StudentPolicy(ROOT / args.ckpt)
-    env = SlitLampEnv(target_eye=args.eye)
+    env = SlitLampEnv(target_eye=args.eye, disturb={"delay": args.delay})
     m = env.model
     renderer = mujoco.Renderer(m, height=H, width=W)
     view = free_camera([0.0, -0.05, 0.95], 1.2, 140, -25)

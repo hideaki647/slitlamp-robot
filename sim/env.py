@@ -5,6 +5,7 @@ M2 の先生、M3 の生徒（学習ポリシー）の両方がこの環境を�
 """
 from pathlib import Path
 
+import cv2
 import mujoco
 import numpy as np
 
@@ -28,10 +29,21 @@ IRIS_COLORS = np.array([
 CONDITIONS = ["normal", "dark", "bright", "gray_iris", "head_far"]
 
 
+# 実機の不完全さ（M4-G）。既定はすべて「なし」＝これまでと同じ。
+DISTURB_DEFAULT = {
+    "delay": 0,        # 観測の遅れ [ステップ]（1ステップ=0.1秒）：方式が受け取る画像・ずれを何ステップ前のものにするか
+    "act_noise": 0.0,  # 指令のばらつき [mm]：実行する指令に毎回足すランダムなずれの標準偏差
+    "kp_scale": 1.0,   # モーターの個体差：アームの位置制御の強さ kp の倍率
+    "img_noise": 0.0,  # 画像のノイズ：画素ごとのランダムなずれの標準偏差（0〜1、明るさ255に対する割合）
+    "blur": 0.0,       # 画像のぼけ：ガウシアンぼかしの広がり [画素]
+}
+
+
 class SlitLampEnv:
-    def __init__(self, img_size=96, seed=None, target_eye="R", condition="normal"):
+    def __init__(self, img_size=96, seed=None, target_eye="R", condition="normal", disturb=None):
         assert condition in CONDITIONS, condition
         self.condition = condition
+        self.disturb = {**DISTURB_DEFAULT, **(disturb or {})}
         self.model = mujoco.MjModel.from_xml_path(str(ROOT / "models" / "scene.xml"))
         self.data = mujoco.MjData(self.model)
         self.robot = SlitLampRobot(self.model, self.data)
@@ -56,6 +68,7 @@ class SlitLampEnv:
             "head_diffuse": m.vis.headlight.diffuse.copy(),
             "head_ambient": m.vis.headlight.ambient.copy(),
         }
+        self.base_kp = m.actuator_gainprm[:, 0].copy()   # モーターの強さ（M4-G の個体差の基準）
         self.substep_n = round(CONTROL_DT / SUBSTEPS / m.opt.timestep)  # 1分割あたりの物理ステップ数
         self.target = np.zeros(2)  # 本体の目標位置 (x, z) [m]
         self.info = {}
@@ -107,7 +120,14 @@ class SlitLampEnv:
         self.target = start.copy()
         self.steps = 0
         self.info.update({"start_offset_mm": (offset * 1000).tolist()})
-        return self.observe()
+
+        # 実機の不完全さ（M4-G）。患者の乱数とは別の乱数を使い、乱れの有無で患者が変わらないようにする
+        self.drng = np.random.default_rng((seed if seed is not None else 0) + 2_000_000)
+        kp = self.base_kp * self.disturb["kp_scale"]
+        self.model.actuator_gainprm[:, 0] = kp
+        self.model.actuator_biasprm[:, 1] = -kp       # 位置制御モーター：力 = kp·(目標 − 角度) − kv·速度
+        self._hist = [(self._degrade(self.observe()), self.error_mm())]
+        return self._hist[0][0]
 
     # ---------- 観測・ずれ ----------
     def observe(self):
@@ -125,6 +145,19 @@ class SlitLampEnv:
     def error_mm(self):
         return self.error() * 1000
 
+    def observed_error_mm(self):
+        """方式が受け取る（遅れた）ずれ [mm]。遅れが無ければ error_mm() と同じ。先生はこれを使う（M4-G）。"""
+        return self._hist[0][1]
+
+    def _degrade(self, img):
+        """画像のぼけとノイズ（M4-G）。設定が無ければ何もしない。"""
+        d = self.disturb
+        if d["blur"] > 0:
+            img = cv2.GaussianBlur(img, (0, 0), d["blur"])
+        if d["img_noise"] > 0:
+            img = np.clip(img + self.drng.normal(0, d["img_noise"] * 255, img.shape), 0, 255).astype(np.uint8)
+        return img
+
     def close(self):
         """描画の後片付け（終了時のEGLの警告を防ぐ）。"""
         self.renderer.close()
@@ -132,7 +165,10 @@ class SlitLampEnv:
     # ---------- 1ステップ ----------
     def step(self, action_mm, on_substep=None):
         """本体を (Δx, Δz)[mm] だけ動かす指令を出し、0.1秒進める。"""
-        a = np.clip(np.asarray(action_mm, dtype=float), -MAX_STEP_MM, MAX_STEP_MM) / 1000
+        a = np.asarray(action_mm, dtype=float)
+        if self.disturb["act_noise"] > 0:          # 指令のばらつき（M4-G）
+            a = a + self.drng.normal(0, self.disturb["act_noise"], 2)
+        a = np.clip(a, -MAX_STEP_MM, MAX_STEP_MM) / 1000
         prev = self.target.copy()
         self.target = np.clip(prev + a, [-X_MAX, -Z_MAX], [X_MAX, Z_MAX])
         for k in range(1, SUBSTEPS + 1):
@@ -142,4 +178,7 @@ class SlitLampEnv:
             if on_substep is not None:
                 on_substep()
         self.steps += 1
-        return self.observe()
+        # 観測の遅れ（M4-G）：最新の画像とずれを積み、delay ステップ前のものを渡す
+        self._hist.append((self._degrade(self.observe()), self.error_mm()))
+        self._hist = self._hist[-(self.disturb["delay"] + 1):]
+        return self._hist[0][0]
