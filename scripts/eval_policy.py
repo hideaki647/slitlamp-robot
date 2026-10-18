@@ -44,12 +44,18 @@ def main():
     p.add_argument("--kp_scale", type=float, default=1.0, help="モーターの強さの倍率")
     p.add_argument("--img_noise", type=float, default=0.0, help="画像のノイズ（0〜1）")
     p.add_argument("--blur", type=float, default=0.0, help="画像のぼけ [画素]")
+    p.add_argument("--out_scale", type=float, default=1.0,
+                   help="方式の指令に掛ける倍率（M4-G 案3：遅れに合わせてゲインを下げる。例 0.15/0.5=0.3）")
     args = p.parse_args()
 
     disturb = {k: getattr(args, k) for k in ("delay", "act_noise", "kp_scale", "img_noise", "blur")}
     env = SlitLampEnv(condition=args.condition, target_eye=args.eye, disturb=disturb)
     policy = load_policy(args.policy)
-    results = [run_episode(env, policy, EVAL_SEED0 + i) for i in range(args.n)]
+    run_policy = policy
+    if args.out_scale != 1.0:  # 指令に倍率を掛ける（学習し直しなしでゲインを下げる）
+        def run_policy(obs, env, _p=policy, _s=args.out_scale):
+            return _s * np.asarray(_p(obs, env))
+    results = [run_episode(env, run_policy, EVAL_SEED0 + i) for i in range(args.n)]
     env.close()
 
     ok = [r for r in results if r["success"]]
@@ -58,6 +64,7 @@ def main():
         "condition": args.condition,
         "eye": args.eye,
         "disturb": disturb,
+        "out_scale": args.out_scale,
         "episodes": args.n,
         "success_rate": len(ok) / args.n,
         "converge_time_s_mean": float(np.mean([r["converge_time_s"] for r in ok])) if ok else None,
