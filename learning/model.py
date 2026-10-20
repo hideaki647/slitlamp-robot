@@ -27,8 +27,11 @@ class SpatialSoftmax(nn.Module):
 
 
 class StudentNet(nn.Module):
-    def __init__(self, keypoints=16):
+    """goal_dim > 0 なら「指示」（例：右眼／左眼の one-hot）を特徴点の座標につなげて入れる（M4-F）。"""
+
+    def __init__(self, keypoints=16, goal_dim=0):
         super().__init__()
+        self.goal_dim = goal_dim
         self.conv = nn.Sequential(
             nn.Conv2d(3, 32, 5, stride=2, padding=2), nn.ReLU(),   # 96 → 48
             nn.Conv2d(32, 32, 3, padding=1), nn.ReLU(),
@@ -37,14 +40,23 @@ class StudentNet(nn.Module):
         )
         self.keypoints = SpatialSoftmax()
         self.head = nn.Sequential(
-            nn.Linear(2 * keypoints, 128), nn.ReLU(),
+            nn.Linear(2 * keypoints + goal_dim, 128), nn.ReLU(),
             nn.Linear(128, 128), nn.ReLU(),
             nn.Linear(128, 2),
         )
 
-    def forward(self, img):
-        """img: (n, 3, 96, 96) float 0〜1 → 指令 (n, 2)、MAX_STEP_MM で割った値（-1〜1 付近）。"""
-        return self.head(self.keypoints(self.conv(img)))
+    def forward(self, img, goal=None):
+        """img: (n, 3, 96, 96) float 0〜1、goal: (n, goal_dim) → 指令 (n, 2)、MAX_STEP_MM で割った値（-1〜1 付近）。"""
+        feat = self.keypoints(self.conv(img))
+        if self.goal_dim:
+            feat = torch.cat([feat, goal], dim=1)
+        return self.head(feat)
+
+
+def goal_onehot(goal, n=2):
+    """指示の番号（0=右眼、1=左眼）→ one-hot (len, n) の float テンソル。"""
+    g = torch.as_tensor(np.atleast_1d(goal), dtype=torch.long)
+    return F.one_hot(g, n).float()
 
 
 def to_tensor(images):
@@ -63,5 +75,7 @@ class StudentPolicy:
 
     @torch.no_grad()
     def __call__(self, obs, env=None):
-        out = self.net(to_tensor(obs[None]))[0].numpy() * MAX_STEP_MM
+        # 指示つきの生徒（M4-F）は、env から「指示」（env.goal：0=右眼、1=左眼）だけを受け取る。目標の位置は見ない
+        goal = goal_onehot(env.goal) if self.net.goal_dim else None
+        out = self.net(to_tensor(obs[None]), goal)[0].numpy() * MAX_STEP_MM
         return np.clip(out, -MAX_STEP_MM, MAX_STEP_MM)

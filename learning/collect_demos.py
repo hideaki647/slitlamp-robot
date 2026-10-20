@@ -29,19 +29,21 @@ OUT_DIR = ROOT / "data" / "demos"
 _env = None  # 各プロセスで1つだけ作る環境
 
 
-def _worker(seed, noise_std, max_steps, eye, out_dir):
+def _worker(seed, noise_std, max_steps, eye, out_dir, switch=False):
     global _env
     from expert.expert_policy import expert_action
     from learning.rollout import run_episode
     from sim.env import SlitLampEnv
 
     if _env is None:
-        _env = SlitLampEnv(target_eye=eye)
+        # 両眼切替（M4-F）：目標の眼はランダム、反対の眼に合わせた状態から始め、両眼の間の距離もばらつかせる
+        _env = (SlitLampEnv(eye_mode="both", start="switch", ipd_mm=(56, 72)) if switch
+                else SlitLampEnv(target_eye=eye))
     # hold_steps を max_steps より大きくして、途中で打ち切らず毎回 max_steps 分を記録する
     r = run_episode(_env, expert_action, seed, max_steps=max_steps, hold_steps=max_steps + 1,
                     noise_std_mm=noise_std, record=True)
     np.savez_compressed(Path(out_dir) / f"ep_{seed:05d}.npz",
-                        images=r.pop("images"), actions=r.pop("actions"), errors=r.pop("errors"))
+                        images=r.pop("images"), actions=r.pop("actions"), errors=r.pop("errors"), goal=_env.goal)
     return r
 
 
@@ -74,8 +76,11 @@ def main():
     p.add_argument("--max_steps", type=int, default=12)
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--eye", default="R", choices=["R", "L"], help="合わせる眼（左眼なら data/demos_L に保存）")
+    p.add_argument("--switch", action="store_true",
+                   help="両眼切替のお手本（M4-F）。data/demos_switch に保存。--max_steps 40 を推奨")
     args = p.parse_args()
-    out_dir = OUT_DIR if args.eye == "R" else ROOT / "data" / "demos_L"
+    out_dir = (ROOT / "data" / "demos_switch" if args.switch
+               else OUT_DIR if args.eye == "R" else ROOT / "data" / "demos_L")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
@@ -83,7 +88,7 @@ def main():
     n = args.episodes
     with ProcessPoolExecutor(args.workers, mp_context=ctx) as ex:
         results = list(ex.map(_worker, range(n), [args.noise_std] * n, [args.max_steps] * n,
-                              [args.eye] * n, [str(out_dir)] * n))
+                              [args.eye] * n, [str(out_dir)] * n, [args.switch] * n))
     dt = time.time() - t0
 
     frames = sum(r["steps"] for r in results)
@@ -93,12 +98,14 @@ def main():
         "noise_std_mm": args.noise_std,
         "max_steps": args.max_steps,
         "eye": args.eye,
+        "switch": args.switch,
         "reached_1mm_rate": float(np.mean([r["min_error_mm"] < 1.0 for r in results])),
         "seconds": round(dt, 1),
     }
     (out_dir / "summary.json").write_text(json.dumps({"summary": summary, "episodes": results}, indent=1, default=float))
     print(summary)
-    grid = "m2_demo_samples.png" if args.eye == "R" else "m3_demo_samples_L.png"
+    grid = ("m4f_demo_samples_switch.png" if args.switch
+            else "m2_demo_samples.png" if args.eye == "R" else "m3_demo_samples_L.png")
     print("saved", sample_grid(out_dir, grid).relative_to(ROOT))
 
 

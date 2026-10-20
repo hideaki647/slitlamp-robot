@@ -50,6 +50,9 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
     xs = [p[0] for p in path if abs(p[0]) >= 0.2]
     oscillations = int(sum(np.sign(a) != np.sign(b) for a, b in zip(xs, xs[1:])))
     result = {
+        # 両眼切替（M4-F）：目標の1mm以内に初めて入った時刻、最初の3ステップで目標から遠ざかったか
+        "first_in_s": float(inside[0] * CONTROL_DT) if len(inside) else None,
+        "away_first3": bool(len(norms) > 3 and norms[3] > norms[0]),
         "post_align_max_mm": post_max,
         "oscillations": oscillations,
         "min_error_mm": min_err,

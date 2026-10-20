@@ -40,10 +40,21 @@ DISTURB_DEFAULT = {
 
 
 class SlitLampEnv:
-    def __init__(self, img_size=96, seed=None, target_eye="R", condition="normal", disturb=None):
+    def __init__(self, img_size=96, seed=None, target_eye="R", condition="normal", disturb=None,
+                 eye_mode=None, start="near", ipd_mm=None):
+        """
+        target_eye : 合わせる眼（"R"／"L"）。eye_mode="both" のときは患者ごとにランダム（M4-F）。
+        start      : "near" = 目標の眼の近く ±15mm から（これまでと同じ）
+                     "switch" = 反対の眼の近く ±5mm から（反対の眼に合わせた状態から移る、M4-F）
+        ipd_mm     : 両眼の間の距離の範囲 (最小, 最大) [mm]。None なら 64mm 固定（これまでと同じ）
+        """
         assert condition in CONDITIONS, condition
+        assert start in ("near", "switch"), start
         self.condition = condition
         self.disturb = {**DISTURB_DEFAULT, **(disturb or {})}
+        self.eye_mode, self.start_mode, self.ipd_mm = eye_mode, start, ipd_mm
+        self.goal_eye = target_eye
+        self.goal = 0 if target_eye == "R" else 1   # 生徒に渡す「指示」：0=右眼、1=左眼（M4-F）
         self.model = mujoco.MjModel.from_xml_path(str(ROOT / "models" / "scene.xml"))
         self.data = mujoco.MjData(self.model)
         self.robot = SlitLampRobot(self.model, self.data)
@@ -54,6 +65,8 @@ class SlitLampEnv:
         self.ids = {
             "head": m.body("head").id,
             "pupil_site": m.site(f"pupil_{target_eye}_center").id,
+            "pupil_sites": {e: m.site(f"pupil_{e}_center").id for e in "RL"},
+            "eyes": {e: m.body(f"eye_{e}").id for e in "RL"},
             "cam": m.camera("slit_cam").id,
             "pupils": [m.geom("pupil_R").id, m.geom("pupil_L").id],
             "iris_mat": m.material("iris_mat").id,
@@ -67,6 +80,7 @@ class SlitLampEnv:
             "slit_diffuse": m.light_diffuse[self.ids["slit_light"]].copy(),
             "head_diffuse": m.vis.headlight.diffuse.copy(),
             "head_ambient": m.vis.headlight.ambient.copy(),
+            "eye_pos": {e: m.body_pos[self.ids["eyes"][e]].copy() for e in "RL"},
         }
         self.base_kp = m.actuator_gainprm[:, 0].copy()   # モーターの強さ（M4-G の個体差の基準）
         self.substep_n = round(CONTROL_DT / SUBSTEPS / m.opt.timestep)  # 1分割あたりの物理ステップ数
@@ -109,12 +123,34 @@ class SlitLampEnv:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         self.info = self._randomize()
+
+        # 両眼切替（M4-F）：目標の眼・両眼の間の距離・開始位置。患者の乱数とは別の乱数を使い、
+        # これらを使わないときは、これまでとまったく同じ患者・開始位置になるようにする
+        srng = np.random.default_rng((seed if seed is not None else 0) + 3_000_000)
+        m, ids = self.model, self.ids
+        if self.ipd_mm is not None:
+            half = srng.uniform(*self.ipd_mm) / 2000
+            for e, sign in (("R", -1), ("L", 1)):
+                m.body_pos[ids["eyes"][e]] = self.base["eye_pos"][e] * [0, 1, 1] + [sign * half, 0, 0]
+            self.info["ipd_mm"] = half * 2000
+        if self.eye_mode == "both":
+            self.goal_eye = "R" if srng.random() < 0.5 else "L"
+            self.goal = 0 if self.goal_eye == "R" else 1
+        ids["pupil_site"] = ids["pupil_sites"][self.goal_eye]
+        self.info.update({"goal_eye": self.goal_eye, "start": self.start_mode})
+
         mujoco.mj_resetData(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
 
         # 光軸が瞳孔中心を通る本体位置（＝正解の位置）
         aligned = self.error() + 0.0
         offset = np.array([self.rng.uniform(-0.015, 0.015), self.rng.uniform(-0.008, 0.008)])
+        if self.start_mode == "switch":
+            # 反対の眼に（ほぼ）合わせた状態から始める
+            other = ids["pupil_sites"]["L" if self.goal_eye == "R" else "R"]
+            p, c = self.data.site_xpos[other], self.data.cam_xpos[ids["cam"]]
+            aligned = np.array([p[0] - c[0], p[2] - c[2]])
+            offset = np.array([srng.uniform(-0.005, 0.005), srng.uniform(-0.003, 0.003)])
         start = np.clip(aligned + offset, [-X_MAX, -Z_MAX], [X_MAX, Z_MAX])
         self.robot.grasp(*start)
         self.target = start.copy()
@@ -128,6 +164,12 @@ class SlitLampEnv:
         self.model.actuator_biasprm[:, 1] = -kp       # 位置制御モーター：力 = kp·(目標 − 角度) − kv·速度
         self._hist = [(self._degrade(self.observe()), self.error_mm())]
         return self._hist[0][0]
+
+    def set_goal(self, eye):
+        """診察の途中で目標の眼を変える（「次は左眼」の指示、M4-F の動画用）。"""
+        self.goal_eye, self.goal = eye, (0 if eye == "R" else 1)
+        self.ids["pupil_site"] = self.ids["pupil_sites"][eye]
+        self._hist = [(img, self.error_mm()) for img, _ in self._hist]
 
     # ---------- 観測・ずれ ----------
     def observe(self):

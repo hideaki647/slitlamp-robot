@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 from learning.dataset import load_episodes, split_and_stack
-from learning.model import StudentNet, to_tensor
+from learning.model import StudentNet, goal_onehot, to_tensor
 from sim.env import MAX_STEP_MM
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,9 +33,10 @@ def augment(x, g):
 
 
 @torch.no_grad()
-def evaluate(net, imgs, acts, errs, bs=1024):
+def evaluate(net, imgs, acts, errs, goals, bs=1024):
     net.eval()
-    pred = np.concatenate([net(to_tensor(imgs[i:i + bs])).numpy() for i in range(0, len(imgs), bs)]) * MAX_STEP_MM
+    pred = np.concatenate([net(to_tensor(imgs[i:i + bs]), goal_onehot(goals[i:i + bs]) if net.goal_dim else None).numpy()
+                           for i in range(0, len(imgs), bs)]) * MAX_STEP_MM
     net.train()
     ae = np.linalg.norm(pred - acts, axis=1)  # 指令の誤差の大きさ [mm]
     near = np.linalg.norm(errs, axis=1) < 2.0
@@ -43,16 +44,18 @@ def evaluate(net, imgs, acts, errs, bs=1024):
             "val_err_far_mm": float(ae[~near].mean())}
 
 
-def train(data, out, init=None, epochs=40, bs=256, lr=1e-3, flip=False):
+def train(data, out, init=None, epochs=40, bs=256, lr=1e-3, flip=False, goal=False):
     """data のフォルダ群で学習し、out に重みを、out.json に学習の経過を保存する。
-    flip=True なら、半分の画像を左右反転し、正解の Δx の符号を逆にして混ぜる（右眼の見え方 → 左眼の見え方）。"""
+    flip=True なら、半分の画像を左右反転し、正解の Δx の符号を逆にして混ぜる（右眼の見え方 → 左眼の見え方）。
+    goal=True なら「指示」（0=右眼、1=左眼）も入力する生徒を学習する（M4-F）。"""
     torch.manual_seed(0)
     g = torch.Generator().manual_seed(0)
 
-    (ti, ta, te), (vi, va, ve) = split_and_stack(load_episodes(data))
+    (ti, ta, te, tg), (vi, va, ve, vg) = split_and_stack(load_episodes(data))
     print(f"train {len(ti)} frames / val {len(vi)} frames", flush=True)
 
-    net = StudentNet()
+    config = {"goal_dim": 2} if goal else {}
+    net = StudentNet(**config)
     if init:
         net.load_state_dict(torch.load(init, map_location="cpu")["model"])
     opt = torch.optim.Adam(net.parameters(), lr=lr)
@@ -73,21 +76,21 @@ def train(data, out, init=None, epochs=40, bs=256, lr=1e-3, flip=False):
                 m = torch.rand(len(idx), generator=g) < 0.5
                 x[m] = x[m].flip(-1)
                 y[m, 0] = -y[m, 0]
-            loss = F.mse_loss(net(x), y)
+            loss = F.mse_loss(net(x, goal_onehot(tg[idx]) if goal else None), y)
             opt.zero_grad()
             loss.backward()
             opt.step()
             sched.step()
             losses.append(loss.item())
-        h = {"epoch": ep + 1, "train_loss": float(np.mean(losses)), **evaluate(net, vi, va, ve),
+        h = {"epoch": ep + 1, "train_loss": float(np.mean(losses)), **evaluate(net, vi, va, ve, vg),
              "seconds": round(time.time() - t0)}
         history.append(h)
         print(" ".join(f"{k} {v:.4f}" if isinstance(v, float) else f"{k} {v}" for k, v in h.items()), flush=True)
 
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model": net.state_dict(), "config": {}, "data": [str(d) for d in data]}, out)
-    args = {"data": [str(d) for d in data], "init": init, "epochs": epochs, "bs": bs, "lr": lr, "flip": flip}
+    torch.save({"model": net.state_dict(), "config": config, "data": [str(d) for d in data]}, out)
+    args = {"data": [str(d) for d in data], "init": init, "epochs": epochs, "bs": bs, "lr": lr, "flip": flip, "goal": goal}
     out.with_suffix(".json").write_text(json.dumps({"args": args, "history": history}, indent=1))
     print("saved", out, flush=True)
     return history
@@ -102,8 +105,9 @@ def main():
     p.add_argument("--bs", type=int, default=256)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--flip", action="store_true", help="左右反転のデータ拡張（右眼のデータから左眼の見え方を作る）")
+    p.add_argument("--goal", action="store_true", help="「指示」（右眼／左眼）も入力する生徒（M4-F）")
     a = p.parse_args()
-    train(a.data, a.out, a.init, a.epochs, a.bs, a.lr, a.flip)
+    train(a.data, a.out, a.init, a.epochs, a.bs, a.lr, a.flip, a.goal)
 
 
 if __name__ == "__main__":

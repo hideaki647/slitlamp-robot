@@ -25,6 +25,9 @@ def load_policy(name):
     if name in ("modular", "modular_raw"):
         from policies.modular import ModularPolicy
         return ModularPolicy(calibrate=(name == "modular"))
+    if name == "switch_baseline":
+        from policies.switch_baseline import SwitchBaseline
+        return SwitchBaseline()
     if name.startswith("student:"):
         from learning.model import StudentPolicy
         return StudentPolicy(ROOT / name.split(":", 1)[1])
@@ -44,18 +47,24 @@ def main():
     p.add_argument("--kp_scale", type=float, default=1.0, help="モーターの強さの倍率")
     p.add_argument("--img_noise", type=float, default=0.0, help="画像のノイズ（0〜1）")
     p.add_argument("--blur", type=float, default=0.0, help="画像のぼけ [画素]")
+    # 両眼切替（M4-F）
+    p.add_argument("--task", default="fixed", choices=["fixed", "switch", "near_ipd"],
+                   help="fixed=これまでと同じ／switch=反対の眼から --eye の眼へ移る／near_ipd=--eye の眼の近くから"
+                        "（両眼の間の距離 56〜72mm）")
+    p.add_argument("--max_steps", type=int, default=50, help="制限時間 [ステップ=0.1秒]（切替は80を推奨）")
     p.add_argument("--out_scale", type=float, default=1.0,
                    help="方式の指令に掛ける倍率（M4-G 案3：遅れに合わせてゲインを下げる。例 0.15/0.5=0.3）")
     args = p.parse_args()
 
     disturb = {k: getattr(args, k) for k in ("delay", "act_noise", "kp_scale", "img_noise", "blur")}
-    env = SlitLampEnv(condition=args.condition, target_eye=args.eye, disturb=disturb)
+    task = {"fixed": {}, "switch": {"start": "switch", "ipd_mm": (56, 72)}, "near_ipd": {"ipd_mm": (56, 72)}}[args.task]
+    env = SlitLampEnv(condition=args.condition, target_eye=args.eye, disturb=disturb, **task)
     policy = load_policy(args.policy)
     run_policy = policy
     if args.out_scale != 1.0:  # 指令に倍率を掛ける（学習し直しなしでゲインを下げる）
         def run_policy(obs, env, _p=policy, _s=args.out_scale):
             return _s * np.asarray(_p(obs, env))
-    results = [run_episode(env, run_policy, EVAL_SEED0 + i) for i in range(args.n)]
+    results = [run_episode(env, run_policy, EVAL_SEED0 + i, max_steps=args.max_steps) for i in range(args.n)]
     env.close()
 
     ok = [r for r in results if r["success"]]
@@ -63,6 +72,7 @@ def main():
         "policy": args.policy,
         "condition": args.condition,
         "eye": args.eye,
+        "task": args.task,
         "disturb": disturb,
         "out_scale": args.out_scale,
         "episodes": args.n,
@@ -76,6 +86,10 @@ def main():
                                                                if r["post_align_max_mm"] is not None]) else None,
         "post_align_max_mm_max": float(np.max(pm)) if pm else None,
         "oscillations_mean": float(np.mean([r["oscillations"] for r in results])),
+        # 両眼切替（M4-F）：目標の1mm以内に初めて入るまでの時間、最初の3ステップで遠ざかった割合
+        "first_in_s_mean": float(np.mean(fi)) if (fi := [r["first_in_s"] for r in results
+                                                         if r["first_in_s"] is not None]) else None,
+        "away_first3_rate": float(np.mean([r["away_first3"] for r in results])),
     }
     if hasattr(policy, "misses"):  # モジュール型：瞳孔を見つけられなかった割合
         summary["detect_miss_rate"] = policy.misses / max(policy.calls, 1)
