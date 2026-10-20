@@ -27,13 +27,14 @@ class SpatialSoftmax(nn.Module):
 
 
 class StudentNet(nn.Module):
-    """goal_dim > 0 なら「指示」（例：右眼／左眼の one-hot）を特徴点の座標につなげて入れる（M4-F）。"""
+    """goal_dim > 0 なら「指示」（例：右眼／左眼の one-hot）を特徴点の座標につなげて入れる（M4-F）。
+    stack > 1 なら、今の画像と直前の (stack−1) 枚を色のチャンネル方向に重ねて入れる（フレームスタック、M4-E）。"""
 
-    def __init__(self, keypoints=16, goal_dim=0):
+    def __init__(self, keypoints=16, goal_dim=0, stack=1):
         super().__init__()
-        self.goal_dim = goal_dim
+        self.goal_dim, self.stack = goal_dim, stack
         self.conv = nn.Sequential(
-            nn.Conv2d(3, 32, 5, stride=2, padding=2), nn.ReLU(),   # 96 → 48
+            nn.Conv2d(3 * stack, 32, 5, stride=2, padding=2), nn.ReLU(),   # 96 → 48
             nn.Conv2d(32, 32, 3, padding=1), nn.ReLU(),
             nn.Conv2d(32, 32, 3, padding=1), nn.ReLU(),
             nn.Conv2d(32, keypoints, 1),
@@ -72,10 +73,16 @@ class StudentPolicy:
         self.net = StudentNet(**ckpt.get("config", {}))
         self.net.load_state_dict(ckpt["model"])
         self.net.eval()
+        self.frames = []   # フレームスタック用：直前の画像（M4-E）
 
     @torch.no_grad()
     def __call__(self, obs, env=None):
         # 指示つきの生徒（M4-F）は、env から「指示」（env.goal：0=右眼、1=左眼）だけを受け取る。目標の位置は見ない
         goal = goal_onehot(env.goal) if self.net.goal_dim else None
+        k = self.net.stack
+        if k > 1:   # 新しい患者なら、今の画像で埋めてから始める
+            new = env is None or env.steps == 0 or not self.frames
+            self.frames = [obs] * k if new else ([obs] + self.frames)[:k]
+            obs = np.concatenate(self.frames, axis=-1)          # (H, W, 3k)：今、0.1秒前、0.2秒前…
         out = self.net(to_tensor(obs[None]), goal)[0].numpy() * MAX_STEP_MM
         return np.clip(out, -MAX_STEP_MM, MAX_STEP_MM)

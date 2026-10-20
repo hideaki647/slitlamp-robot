@@ -42,6 +42,21 @@
     <material name="pupil_mat"  rgba="0.02 0.02 0.02 1"/>
     <material name="arm_mat"    rgba="0.95 0.55 0.15 1"/>
     <material name="arm_dark"   rgba="0.25 0.25 0.28 1"/>
+    <!-- 瞼の形（M4-E）：scripts/make_lids.py で作る。上瞼は閉じ具合ごとに13個、下瞼は1個 -->
+    <mesh name="lid_up_00" file="lids/lid_up_00.obj"/>
+    <mesh name="lid_up_01" file="lids/lid_up_01.obj"/>
+    <mesh name="lid_up_02" file="lids/lid_up_02.obj"/>
+    <mesh name="lid_up_03" file="lids/lid_up_03.obj"/>
+    <mesh name="lid_up_04" file="lids/lid_up_04.obj"/>
+    <mesh name="lid_up_05" file="lids/lid_up_05.obj"/>
+    <mesh name="lid_up_06" file="lids/lid_up_06.obj"/>
+    <mesh name="lid_up_07" file="lids/lid_up_07.obj"/>
+    <mesh name="lid_up_08" file="lids/lid_up_08.obj"/>
+    <mesh name="lid_up_09" file="lids/lid_up_09.obj"/>
+    <mesh name="lid_up_10" file="lids/lid_up_10.obj"/>
+    <mesh name="lid_up_11" file="lids/lid_up_11.obj"/>
+    <mesh name="lid_up_12" file="lids/lid_up_12.obj"/>
+    <mesh name="lid_low" file="lids/lid_low.obj"/>
   </asset>
 
   <worldbody>
@@ -116,6 +131,21 @@
         <geom name="iris_R"  type="cylinder" pos="0 -0.0122 0" euler="90 0 0" size="0.006 0.0004" material="iris_mat"/>
         <geom name="pupil_R" type="cylinder" pos="0 -0.0127 0" euler="90 0 0" size="0.0025 0.0002" material="pupil_mat"/>
         <site name="pupil_R_center" pos="0 -0.013 0" size="0.001"/>
+        <!-- 瞼（M4-E）：使わないときは眼球の奥（頭の中）に隠す。sim/env.py が、表示する形だけを眼の位置へ動かす -->
+        <geom name="lid_up_00" type="mesh" mesh="lid_up_00" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_01" type="mesh" mesh="lid_up_01" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_02" type="mesh" mesh="lid_up_02" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_03" type="mesh" mesh="lid_up_03" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_04" type="mesh" mesh="lid_up_04" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_05" type="mesh" mesh="lid_up_05" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_06" type="mesh" mesh="lid_up_06" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_07" type="mesh" mesh="lid_up_07" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_08" type="mesh" mesh="lid_up_08" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_09" type="mesh" mesh="lid_up_09" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_10" type="mesh" mesh="lid_up_10" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_11" type="mesh" mesh="lid_up_11" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_up_12" type="mesh" mesh="lid_up_12" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
+        <geom name="lid_low" type="mesh" mesh="lid_low" pos="0 0.05 0" material="skin_mat" contype="0" conaffinity="0"/>
       </body>
       <body name="eye_L" pos="0.032 -0.085 0">
         <geom name="eyeball_L" type="sphere" size="0.012" material="sclera_mat"/>

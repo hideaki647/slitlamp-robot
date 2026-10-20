@@ -1,7 +1,7 @@
 """1エピソード（1回の診察）を走らせる共通の関数。先生・生徒の両方で使う。"""
 import numpy as np
 
-from sim.env import CONTROL_DT, SUCCESS_MM
+from sim.env import CONTROL_DT, PUPIL_HIDDEN_AT, SUCCESS_MM
 
 
 def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
@@ -18,10 +18,13 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
     images, actions, errors = [], [], []
     converged_at, hold = None, 0
     path = []   # 各ステップのずれ（振動・行き過ぎの計算用、M4-G）
+    lamp, closures = [], []   # 各ステップの本体の目標位置 [mm] と瞼の閉じ具合（瞬きの指標用、M4-E）
 
     for t in range(max_steps):
         err = env.error_mm()
         path.append(err)
+        lamp.append(env.target * 1000)
+        closures.append(env.lid_closure)
         if np.linalg.norm(err) < SUCCESS_MM:
             hold += 1
             if converged_at is None:
@@ -41,6 +44,8 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
 
     final = env.error_mm()
     path.append(final)
+    lamp.append(env.target * 1000)
+    closures.append(env.lid_closure)
     min_err = min(np.linalg.norm(e) for e in errors) if record and errors else None
     # 合った後の最大のずれ：一度 1mm 以内に入ったあと、どこまで離れたか（行き過ぎ・ふらつき、安全性の目安）
     norms = np.linalg.norm(np.array(path), axis=1)
@@ -64,8 +69,45 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
         "steps": env.steps,
         **env.info,
     }
+    if getattr(env, "blink", None) in ("random", "eval"):
+        result.update(blink_metrics(norms, np.array(lamp), np.array(closures)))
     if record:
         result["images"] = np.array(images, dtype=np.uint8)
         result["actions"] = np.array(actions, dtype=np.float32)
         result["errors"] = np.array(errors, dtype=np.float32)
     return result
+
+
+def blink_metrics(norms, lamp, closures):
+    """瞬きの指標（M4-E）。norms：各ステップのずれ [mm]、lamp：本体の目標位置 [mm]、closures：瞼の閉じ具合。
+    瞳孔が半分以上隠れているステップ（閉じ具合 > PUPIL_HIDDEN_AT）を「瞬き中」とする。"""
+    hidden = closures > PUPIL_HIDDEN_AT
+    moves, recoveries = [], []
+    i = 0
+    while i < len(hidden):
+        if not hidden[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(hidden) and hidden[j]:
+            j += 1
+        before = max(i - 1, 0)                       # 瞬きの直前
+        # 瞬き中の最大の動き：直前の本体の位置から、瞬き中（開いた直後まで）にどれだけ動いたか
+        moves.append(float(np.max(np.linalg.norm(lamp[before:min(j + 1, len(lamp))] - lamp[before], axis=1))))
+        # 合わせ直しの時間：瞬きの直前に合っていた場合だけ、開いてから 1mm 以内に戻るまで
+        if norms[before] < SUCCESS_MM:
+            back = np.nonzero(norms[j:] < SUCCESS_MM)[0]
+            recoveries.append(float(back[0] * CONTROL_DT) if len(back) else None)
+        i = j
+    inside = np.nonzero(norms < SUCCESS_MM)[0]
+    if len(inside):
+        visible = ~hidden[inside[0]:]
+        aligned_frac = float(np.mean(norms[inside[0]:][visible] < SUCCESS_MM)) if visible.any() else None
+    else:
+        aligned_frac = 0.0
+    return {
+        "blink_move_max_mm": max(moves) if moves else None,
+        "blink_recover_s": [r for r in recoveries],
+        "aligned_fraction": aligned_frac,
+        "final_aligned": bool(np.all(norms[-5:] < SUCCESS_MM)),
+    }

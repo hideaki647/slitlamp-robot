@@ -19,15 +19,23 @@ def load_episodes(dirs):
     return eps
 
 
-def split_and_stack(eps, val_every=10):
+def split_and_stack(eps, val_every=10, stack=1):
     """エピソード単位で学習用・確認用に分ける（seed が val_every の倍数のものを確認用に）。
     同じエピソードの画像は互いによく似ているので、画像単位で分けると確認用の成績が甘くなる。
-    返り値：(画像, 指令, ずれ, 指示) の組を、学習用・確認用それぞれ。"""
-    def stack(sel):
+    返り値：(画像, 指令, ずれ, 指示, 履歴) の組を、学習用・確認用それぞれ。
+    履歴 (N, stack)：各画像について、今・1つ前・2つ前…の画像の番号（エピソードの最初より前は最初の画像）。
+    フレームスタック（M4-E）で、画像を重ねるのに使う。stack=1 なら自分自身だけ。"""
+    def stack_(sel):
+        hist, n0 = [], 0
+        for e in sel:
+            t = np.arange(len(e["actions"]))
+            hist.append(n0 + np.maximum(t[:, None] - np.arange(stack)[None, :], 0))
+            n0 += len(t)
         return (np.concatenate([e["images"] for e in sel]),
                 np.concatenate([e["actions"] for e in sel]),
                 np.concatenate([e["errors"] for e in sel]),
-                np.concatenate([np.full(len(e["actions"]), e["goal"]) for e in sel]))
+                np.concatenate([np.full(len(e["actions"]), e["goal"]) for e in sel]),
+                np.concatenate(hist))
     train = [e for e in eps if e["seed"] % val_every != 0]
     val = [e for e in eps if e["seed"] % val_every == 0]
-    return stack(train), stack(val)
+    return stack_(train), stack_(val)

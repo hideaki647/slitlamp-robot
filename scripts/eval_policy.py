@@ -52,19 +52,23 @@ def main():
                    help="fixed=これまでと同じ／switch=反対の眼から --eye の眼へ移る／near_ipd=--eye の眼の近くから"
                         "（両眼の間の距離 56〜72mm）")
     p.add_argument("--max_steps", type=int, default=50, help="制限時間 [ステップ=0.1秒]（切替は80を推奨）")
+    # 瞬き（M4-E）：rest=瞼はあるが瞬きしない／eval=1.0秒と2.5秒に瞬き（途中で打ち切らず最後まで走らせる）
+    p.add_argument("--blink", default=None, choices=["rest", "eval"])
     p.add_argument("--out_scale", type=float, default=1.0,
                    help="方式の指令に掛ける倍率（M4-G 案3：遅れに合わせてゲインを下げる。例 0.15/0.5=0.3）")
     args = p.parse_args()
 
     disturb = {k: getattr(args, k) for k in ("delay", "act_noise", "kp_scale", "img_noise", "blur")}
     task = {"fixed": {}, "switch": {"start": "switch", "ipd_mm": (56, 72)}, "near_ipd": {"ipd_mm": (56, 72)}}[args.task]
-    env = SlitLampEnv(condition=args.condition, target_eye=args.eye, disturb=disturb, **task)
+    env = SlitLampEnv(condition=args.condition, target_eye=args.eye, disturb=disturb, blink=args.blink, **task)
     policy = load_policy(args.policy)
     run_policy = policy
     if args.out_scale != 1.0:  # 指令に倍率を掛ける（学習し直しなしでゲインを下げる）
         def run_policy(obs, env, _p=policy, _s=args.out_scale):
             return _s * np.asarray(_p(obs, env))
-    results = [run_episode(env, run_policy, EVAL_SEED0 + i, max_steps=args.max_steps) for i in range(args.n)]
+    hold = args.max_steps + 1 if args.blink == "eval" else 5   # 瞬きの評価は打ち切らない
+    results = [run_episode(env, run_policy, EVAL_SEED0 + i, max_steps=args.max_steps, hold_steps=hold)
+               for i in range(args.n)]
     env.close()
 
     ok = [r for r in results if r["success"]]
@@ -73,6 +77,7 @@ def main():
         "condition": args.condition,
         "eye": args.eye,
         "task": args.task,
+        "blink": args.blink,
         "disturb": disturb,
         "out_scale": args.out_scale,
         "episodes": args.n,
@@ -91,6 +96,17 @@ def main():
                                                          if r["first_in_s"] is not None]) else None,
         "away_first3_rate": float(np.mean([r["away_first3"] for r in results])),
     }
+    if args.blink == "eval":   # 瞬きの指標（M4-E）
+        rec = [x for r in results for x in r["blink_recover_s"]]
+        summary.update({
+            "final_aligned_rate": float(np.mean([r["final_aligned"] for r in results])),
+            "blink_move_max_mm_mean": float(np.mean([r["blink_move_max_mm"] for r in results])),
+            "blink_move_max_mm_max": float(np.max([r["blink_move_max_mm"] for r in results])),
+            "blink_recover_s_mean": float(np.mean([x for x in rec if x is not None])) if any(
+                x is not None for x in rec) else None,
+            "blink_recover_fail_rate": float(np.mean([x is None for x in rec])) if rec else None,
+            "aligned_fraction_mean": float(np.mean([r["aligned_fraction"] for r in results])),
+        })
     if hasattr(policy, "misses"):  # モジュール型：瞳孔を見つけられなかった割合
         summary["detect_miss_rate"] = policy.misses / max(policy.calls, 1)
     for k, v in summary.items():

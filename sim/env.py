@@ -25,6 +25,13 @@ IRIS_COLORS = np.array([
 ])
 
 
+# 瞬き（M4-E）
+LID_LEVELS = 13            # 上瞼の形の数（scripts/make_lids.py と同じ）
+LID_HIDE = np.array([0.0, 0.05, 0.0])   # 使わない瞼を眼球の奥へ隠すずらし量 [m]（scene.xml と同じ）
+BLINK_CLOSE, BLINK_OPEN = 0.10, 0.15   # 閉じる時間・開く時間 [s]
+PUPIL_HIDDEN_AT = 0.42     # この閉じ具合を超えると、上瞼の縁の中央が瞳孔中心より下（瞳孔が半分以上隠れる）
+EVAL_BLINKS = (1.0, 2.5)   # 評価用：この時刻に必ず瞬きする [s]（閉じたままの時間 0.1秒）
+
 # 汎化テスト用の「学習時に無かった条件」（M3）
 CONDITIONS = ["normal", "dark", "bright", "gray_iris", "head_far"]
 
@@ -41,13 +48,17 @@ DISTURB_DEFAULT = {
 
 class SlitLampEnv:
     def __init__(self, img_size=96, seed=None, target_eye="R", condition="normal", disturb=None,
-                 eye_mode=None, start="near", ipd_mm=None):
+                 eye_mode=None, start="near", ipd_mm=None, blink=None):
         """
         target_eye : 合わせる眼（"R"／"L"）。eye_mode="both" のときは患者ごとにランダム（M4-F）。
         start      : "near" = 目標の眼の近く ±15mm から（これまでと同じ）
                      "switch" = 反対の眼の近く ±5mm から（反対の眼に合わせた状態から移る、M4-F）
         ipd_mm     : 両眼の間の距離の範囲 (最小, 最大) [mm]。None なら 64mm 固定（これまでと同じ）
+        blink      : 右眼の瞼と瞬き（M4-E）。None = 瞼なし（これまでと同じ）／"rest" = 瞼はあるが瞬きしない／
+                     "random" = ランダムな時刻に瞬き（学習用）／"eval" = 1.0秒と2.5秒に必ず瞬き（評価用）
         """
+        assert blink in (None, "rest", "random", "eval"), blink
+        self.blink = blink
         assert condition in CONDITIONS, condition
         assert start in ("near", "switch"), start
         self.condition = condition
@@ -83,6 +94,11 @@ class SlitLampEnv:
             "eye_pos": {e: m.body_pos[self.ids["eyes"][e]].copy() for e in "RL"},
         }
         self.base_kp = m.actuator_gainprm[:, 0].copy()   # モーターの強さ（M4-G の個体差の基準）
+        # 瞼（M4-E）：上瞼13個＋下瞼。scene.xml では眼球の奥に隠してあり、表示するものだけ眼の位置へ動かす
+        self.lid_ids = [m.geom(f"lid_up_{k:02d}").id for k in range(LID_LEVELS)] + [m.geom("lid_low").id]
+        self.lid_hidden = m.geom_pos[self.lid_ids].copy()
+        self.lid_closure = 0.0
+        self.blinks = []           # 瞬きの予定 [(開始, 閉じたままの時間)]
         self.substep_n = round(CONTROL_DT / SUBSTEPS / m.opt.timestep)  # 1分割あたりの物理ステップ数
         self.target = np.zeros(2)  # 本体の目標位置 (x, z) [m]
         self.info = {}
@@ -162,8 +178,48 @@ class SlitLampEnv:
         kp = self.base_kp * self.disturb["kp_scale"]
         self.model.actuator_gainprm[:, 0] = kp
         self.model.actuator_biasprm[:, 1] = -kp       # 位置制御モーター：力 = kp·(目標 − 角度) − kv·速度
+        brng = np.random.default_rng((seed if seed is not None else 0) + 4_000_000)
+        if self.blink == "random":           # 学習用：最初は0.3〜1.5秒後、その後は1.5〜4秒おき
+            t, self.blinks = brng.uniform(0.3, 1.5), []
+            while t < 8.0:
+                self.blinks.append((t, brng.uniform(0.0, 0.15)))
+                t += brng.uniform(1.5, 4.0)
+        else:
+            self.blinks = [(t, 0.1) for t in EVAL_BLINKS] if self.blink == "eval" else []
+        self.info["blinks"] = [round(b[0], 2) for b in self.blinks]
+        self._set_lid(0.0)
         self._hist = [(self._degrade(self.observe()), self.error_mm())]
         return self._hist[0][0]
+
+    # ---------- 瞼・瞬き（M4-E） ----------
+    def closure_at(self, t):
+        """時刻 t [s] の上瞼の閉じ具合（0=普段、1=完全に閉じる）。"""
+        c = 0.0
+        for start, hold in self.blinks:
+            dt = t - start
+            if 0 <= dt < BLINK_CLOSE:
+                c = max(c, dt / BLINK_CLOSE)
+            elif BLINK_CLOSE <= dt < BLINK_CLOSE + hold:
+                c = 1.0
+            elif BLINK_CLOSE + hold <= dt < BLINK_CLOSE + hold + BLINK_OPEN:
+                c = max(c, 1 - (dt - BLINK_CLOSE - hold) / BLINK_OPEN)
+        return c
+
+    def _set_lid(self, t):
+        """時刻 t の瞼を表示する（いちばん近い形の上瞼と、下瞼）。瞼なしの設定なら全部隠す。"""
+        m = self.model
+        m.geom_pos[self.lid_ids] = self.lid_hidden
+        self.lid_closure = self.closure_at(t) if self.blink else 0.0
+        if self.blink:
+            k = int(round(self.lid_closure * (LID_LEVELS - 1)))
+            for g in (self.lid_ids[k], self.lid_ids[-1]):
+                m.geom_pos[g] = self.lid_hidden[self.lid_ids.index(g)] - LID_HIDE
+        mujoco.mj_kinematics(m, self.data)
+
+    @property
+    def pupil_hidden(self):
+        """瞳孔が瞼で半分以上隠れているか（特権情報。先生が「待つ」かどうかの判断に使う）。"""
+        return self.lid_closure > PUPIL_HIDDEN_AT
 
     def set_goal(self, eye):
         """診察の途中で目標の眼を変える（「次は左眼」の指示、M4-F の動画用）。"""
@@ -217,6 +273,8 @@ class SlitLampEnv:
             self.robot.command(*(prev + (self.target - prev) * k / SUBSTEPS))
             for _ in range(self.substep_n):
                 mujoco.mj_step(self.model, self.data)
+            if self.blink:                     # 瞼は 0.02秒ごとに動かす（半分閉じた画像も生じる）
+                self._set_lid((self.steps + k / SUBSTEPS) * CONTROL_DT)
             if on_substep is not None:
                 on_substep()
         self.steps += 1
