@@ -30,9 +30,9 @@ class StudentNet(nn.Module):
     """goal_dim > 0 なら「指示」（例：右眼／左眼の one-hot）を特徴点の座標につなげて入れる（M4-F）。
     stack > 1 なら、今の画像と直前の (stack−1) 枚を色のチャンネル方向に重ねて入れる（フレームスタック、M4-E）。"""
 
-    def __init__(self, keypoints=16, goal_dim=0, stack=1):
+    def __init__(self, keypoints=16, goal_dim=0, stack=1, out_dim=2):
         super().__init__()
-        self.goal_dim, self.stack = goal_dim, stack
+        self.goal_dim, self.stack = goal_dim, stack   # out_dim=3：(Δx, Δz, Δy)、ピント合わせ（M4-H）
         self.conv = nn.Sequential(
             nn.Conv2d(3 * stack, 32, 5, stride=2, padding=2), nn.ReLU(),   # 96 → 48
             nn.Conv2d(32, 32, 3, padding=1), nn.ReLU(),
@@ -43,7 +43,7 @@ class StudentNet(nn.Module):
         self.head = nn.Sequential(
             nn.Linear(2 * keypoints + goal_dim, 128), nn.ReLU(),
             nn.Linear(128, 128), nn.ReLU(),
-            nn.Linear(128, 2),
+            nn.Linear(128, out_dim),
         )
 
     def forward(self, img, goal=None):

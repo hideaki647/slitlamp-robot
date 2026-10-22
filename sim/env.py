@@ -9,7 +9,7 @@ import cv2
 import mujoco
 import numpy as np
 
-from sim.slitlamp_api import X_MAX, Z_MAX, SlitLampRobot
+from sim.slitlamp_api import X_MAX, Y_MAX, Z_MAX, SlitLampRobot
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,6 +32,11 @@ BLINK_CLOSE, BLINK_OPEN = 0.10, 0.15   # 閉じる時間・開く時間 [s]
 PUPIL_HIDDEN_AT = 0.42     # この閉じ具合を超えると、上瞼の縁の中央が瞳孔中心より下（瞳孔が半分以上隠れる）
 EVAL_BLINKS = (1.0, 2.5)   # 評価用：この時刻に必ず瞬きする [s]（閉じたままの時間 0.1秒）
 
+# ピント合わせ（M4-H）
+FOCUS_TOL_MM = 0.5           # 前後のずれがこれ未満なら「ピントが合っている」
+BLUR_PX_PER_MM = 1.0         # 焦点からのずれ 1mm あたりのぼかしの広がり（ガウシアンの σ）[画素]
+BLUR_LEVELS = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)   # 作っておくぼかしの強さ [画素]。画素ごとに近いものを選ぶ
+
 # 汎化テスト用の「学習時に無かった条件」（M3）
 CONDITIONS = ["normal", "dark", "bright", "gray_iris", "head_far"]
 
@@ -48,7 +53,7 @@ DISTURB_DEFAULT = {
 
 class SlitLampEnv:
     def __init__(self, img_size=96, seed=None, target_eye="R", condition="normal", disturb=None,
-                 eye_mode=None, start="near", ipd_mm=None, blink=None):
+                 eye_mode=None, start="near", ipd_mm=None, blink=None, focus=None):
         """
         target_eye : 合わせる眼（"R"／"L"）。eye_mode="both" のときは患者ごとにランダム（M4-F）。
         start      : "near" = 目標の眼の近く ±15mm から（これまでと同じ）
@@ -56,9 +61,13 @@ class SlitLampEnv:
         ipd_mm     : 両眼の間の距離の範囲 (最小, 最大) [mm]。None なら 64mm 固定（これまでと同じ）
         blink      : 右眼の瞼と瞬き（M4-E）。None = 瞼なし（これまでと同じ）／"rest" = 瞼はあるが瞬きしない／
                      "random" = ランダムな時刻に瞬き（学習用）／"eval" = 1.0秒と2.5秒に必ず瞬き（評価用）
+        focus      : ピント合わせ（M4-H）。None = ボケなし・前後は動かさない（これまでと同じ）／
+                     "back" = 焦点より 3〜8mm 手前（検者側）から始める（臨床でよく行う手順）／
+                     "front" = 焦点より 3〜8mm 奥（近づきすぎ）から始める。指令は (Δx, Δz, Δy) の3つになる
         """
         assert blink in (None, "rest", "random", "eval"), blink
-        self.blink = blink
+        assert focus in (None, "back", "front"), focus
+        self.blink, self.focus = blink, focus
         assert condition in CONDITIONS, condition
         assert start in ("near", "switch"), start
         self.condition = condition
@@ -100,6 +109,14 @@ class SlitLampEnv:
         self.lid_closure = 0.0
         self.blinks = []           # 瞬きの予定 [(開始, 閉じたままの時間)]
         self.substep_n = round(CONTROL_DT / SUBSTEPS / m.opt.timestep)  # 1分割あたりの物理ステップ数
+        # ピント合わせ（M4-H）：焦点までの距離＝標準の姿勢で、細隙灯カメラから瞳孔中心までの前後の距離
+        d0 = mujoco.MjData(m)
+        mujoco.mj_forward(m, d0)
+        self.focus_dist = d0.site_xpos[self.ids["pupil_site"]][1] - d0.cam_xpos[self.ids["cam"]][1]
+        self.target_y = 0.0
+        if focus:
+            self.depth_renderer = mujoco.Renderer(m, height=img_size, width=img_size)
+            self.depth_renderer.enable_depth_rendering()
         self.target = np.zeros(2)  # 本体の目標位置 (x, z) [m]
         self.info = {}
 
@@ -168,8 +185,20 @@ class SlitLampEnv:
             aligned = np.array([p[0] - c[0], p[2] - c[2]])
             offset = np.array([srng.uniform(-0.005, 0.005), srng.uniform(-0.003, 0.003)])
         start = np.clip(aligned + offset, [-X_MAX, -Z_MAX], [X_MAX, Z_MAX])
-        self.robot.grasp(*start)
+        start_y = 0.0
+        if self.focus:
+            # 患者の前後の座り方 ±5mm、開始は焦点より 3〜8mm 手前（back）または奥（front）。患者の乱数とは別の乱数
+            frng = np.random.default_rng((seed if seed is not None else 0) + 5_000_000)
+            m.body_pos[ids["head"]][1] = self.base["head_pos"][1] + frng.uniform(-0.005, 0.005)
+            mujoco.mj_forward(self.model, self.data)
+            p, c = self.data.site_xpos[ids["pupil_site"]], self.data.cam_xpos[ids["cam"]]
+            aligned_y = (p[1] - c[1]) - self.focus_dist          # ピントが合う本体の前後位置
+            gap = frng.uniform(0.003, 0.008)
+            start_y = float(np.clip(aligned_y + (-gap if self.focus == "back" else gap), -Y_MAX, Y_MAX))
+            self.info["start_focus_mm"] = (start_y - aligned_y) * 1000
+        self.robot.grasp(*start, y=start_y)
         self.target = start.copy()
+        self.target_y = start_y
         self.steps = 0
         self.info.update({"start_offset_mm": (offset * 1000).tolist()})
 
@@ -229,9 +258,26 @@ class SlitLampEnv:
 
     # ---------- 観測・ずれ ----------
     def observe(self):
-        """細隙灯カメラの画像（img_size×img_size×3、uint8）。生徒AIが見るのはこれだけ。"""
+        """細隙灯カメラの画像（img_size×img_size×3、uint8）。生徒AIが見るのはこれだけ。
+        ピント合わせ（M4-H）のときは、焦点からのずれに応じて画素ごとにぼかす。"""
         self.renderer.update_scene(self.data, camera="slit_cam")
-        return self.renderer.render()
+        img = self.renderer.render()
+        if self.focus:
+            img = self._defocus(img)
+        return img
+
+    def _defocus(self, img):
+        """深度画像（カメラから各画素までの前後の距離）を使い、焦点からのずれが大きい画素ほど強くぼかす。
+        ボケの広がり σ = BLUR_PX_PER_MM × |距離 − 焦点距離|[mm]。強さの違うぼかしを数段階作り、画素ごとに選ぶ。"""
+        self.depth_renderer.update_scene(self.data, camera="slit_cam")
+        depth = self.depth_renderer.render()
+        sigma = np.clip(BLUR_PX_PER_MM * np.abs(depth - self.focus_dist) * 1000, 0, BLUR_LEVELS[-1])
+        level = np.abs(sigma[..., None] - np.array(BLUR_LEVELS)).argmin(-1)
+        out = img.copy()
+        for k, s in enumerate(BLUR_LEVELS):
+            if s > 0 and (level == k).any():
+                out[level == k] = cv2.GaussianBlur(img, (0, 0), s)[level == k]
+        return out
 
     def error(self):
         """瞳孔中心 − 光軸（細隙灯カメラの位置）の (x, z) [m]。シミュレータだけが知る特権情報。"""
@@ -241,7 +287,20 @@ class SlitLampEnv:
         return np.array([p[0] - c[0], p[2] - c[2]])
 
     def error_mm(self):
-        return self.error() * 1000
+        """ずれ [mm]。ピント合わせ（M4-H）のときは (x, z, y) の3つ。y = 瞳孔までの前後の距離 − 焦点距離
+        （正なら焦点より手前＝もっと奥へ押す必要がある）。指令 (Δx, Δz, Δy) と同じ並び。"""
+        e = self.error() * 1000
+        if self.focus:
+            d = self.data
+            gap = d.site_xpos[self.ids["pupil_site"]][1] - d.cam_xpos[self.ids["cam"]][1] - self.focus_dist
+            e = np.append(e, gap * 1000)
+        return e
+
+    def is_aligned(self, err_mm=None):
+        """合っているか：左右・上下が SUCCESS_MM 未満（ピント合わせのときは、さらに前後が FOCUS_TOL_MM 未満）。"""
+        e = self.error_mm() if err_mm is None else err_mm
+        ok = np.linalg.norm(e[:2]) < SUCCESS_MM
+        return bool(ok and (len(e) < 3 or abs(e[2]) < FOCUS_TOL_MM))
 
     def observed_error_mm(self):
         """方式が受け取る（遅れた）ずれ [mm]。遅れが無ければ error_mm() と同じ。先生はこれを使う（M4-G）。"""
@@ -259,6 +318,8 @@ class SlitLampEnv:
     def close(self):
         """描画の後片付け（終了時のEGLの警告を防ぐ）。"""
         self.renderer.close()
+        if self.focus:
+            self.depth_renderer.close()
 
     # ---------- 1ステップ ----------
     def step(self, action_mm, on_substep=None):
@@ -267,10 +328,13 @@ class SlitLampEnv:
         if self.disturb["act_noise"] > 0:          # 指令のばらつき（M4-G）
             a = a + self.drng.normal(0, self.disturb["act_noise"], 2)
         a = np.clip(a, -MAX_STEP_MM, MAX_STEP_MM) / 1000
-        prev = self.target.copy()
-        self.target = np.clip(prev + a, [-X_MAX, -Z_MAX], [X_MAX, Z_MAX])
+        prev, prev_y = self.target.copy(), self.target_y
+        self.target = np.clip(prev + a[:2], [-X_MAX, -Z_MAX], [X_MAX, Z_MAX])
+        if self.focus and len(a) > 2:          # 前後（ピント合わせ、M4-H）
+            self.target_y = float(np.clip(prev_y + a[2], -Y_MAX, Y_MAX))
         for k in range(1, SUBSTEPS + 1):
-            self.robot.command(*(prev + (self.target - prev) * k / SUBSTEPS))
+            f = k / SUBSTEPS
+            self.robot.command(*(prev + (self.target - prev) * f), y=prev_y + (self.target_y - prev_y) * f)
             for _ in range(self.substep_n):
                 mujoco.mj_step(self.model, self.data)
             if self.blink:                     # 瞼は 0.02秒ごとに動かす（半分閉じた画像も生じる）

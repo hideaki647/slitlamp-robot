@@ -54,13 +54,15 @@ def main():
     p.add_argument("--max_steps", type=int, default=50, help="制限時間 [ステップ=0.1秒]（切替は80を推奨）")
     # 瞬き（M4-E）：rest=瞼はあるが瞬きしない／eval=1.0秒と2.5秒に瞬き（途中で打ち切らず最後まで走らせる）
     p.add_argument("--blink", default=None, choices=["rest", "eval"])
+    # ピント合わせ（M4-H）：back=焦点より手前から（臨床でよく行う手順）／front=焦点より奥（近づきすぎ）から
+    p.add_argument("--focus", default=None, choices=["back", "front"])
     p.add_argument("--out_scale", type=float, default=1.0,
                    help="方式の指令に掛ける倍率（M4-G 案3：遅れに合わせてゲインを下げる。例 0.15/0.5=0.3）")
     args = p.parse_args()
 
     disturb = {k: getattr(args, k) for k in ("delay", "act_noise", "kp_scale", "img_noise", "blur")}
     task = {"fixed": {}, "switch": {"start": "switch", "ipd_mm": (56, 72)}, "near_ipd": {"ipd_mm": (56, 72)}}[args.task]
-    env = SlitLampEnv(condition=args.condition, target_eye=args.eye, disturb=disturb, blink=args.blink, **task)
+    env = SlitLampEnv(condition=args.condition, target_eye=args.eye, disturb=disturb, blink=args.blink, focus=args.focus, **task)
     policy = load_policy(args.policy)
     run_policy = policy
     if args.out_scale != 1.0:  # 指令に倍率を掛ける（学習し直しなしでゲインを下げる）
@@ -78,6 +80,7 @@ def main():
         "eye": args.eye,
         "task": args.task,
         "blink": args.blink,
+        "focus": args.focus,
         "disturb": disturb,
         "out_scale": args.out_scale,
         "episodes": args.n,
@@ -96,6 +99,12 @@ def main():
                                                          if r["first_in_s"] is not None]) else None,
         "away_first3_rate": float(np.mean([r["away_first3"] for r in results])),
     }
+    if args.focus:   # ピント合わせの指標（M4-H）
+        summary.update({
+            "focus_away_first3_rate": float(np.mean([r["focus_away_first3"] for r in results])),
+            "final_focus_mm_mean": float(np.mean([r["final_focus_mm"] for r in results])),
+            "max_focus_mm_mean": float(np.mean([r["max_focus_mm"] for r in results])),
+        })
     if args.blink == "eval":   # 瞬きの指標（M4-E）
         rec = [x for r in results for x in r["blink_recover_s"]]
         summary.update({

@@ -14,6 +14,7 @@ ROLL_MAX = np.deg2rad(24)    # ジョイスティックの可動範囲（25°）
 SPIN_MAX = np.deg2rad(350)
 X_MAX = K_XY * ROLL_MAX      # 本体が動ける左右の範囲 ±約63mm
 Z_MAX = C_Z * SPIN_MAX       # 本体が動ける高さの範囲 ±約19mm
+Y_MAX = 0.035                # 本体が動ける前後の範囲 ±35mm（lamp_y の可動範囲 ±40mm の内側。M4-H のピント合わせ）
 
 # 握ったときの手とノブの向きの関係：手は下向き、ノブの軸は上向き → x軸まわりに180°反転
 GRIP_FLIP = np.diag([1.0, -1.0, -1.0])
@@ -36,43 +37,47 @@ class SlitLampRobot:
         self.q_arm = Q_GUESS.copy()
 
     # ---------- 換算 ----------
-    def lamp_to_joystick(self, x, z):
-        """本体の目標位置 (x, z)[m] → ジョイスティック角 (roll, spin)[rad]。可動範囲で打ち切る。"""
+    def lamp_to_joystick(self, x, z, y=0.0):
+        """本体の目標位置 (x, z, y)[m] → ジョイスティック角 (roll, spin, pitch)[rad]。可動範囲で打ち切る。
+        前後 y は、ジョイスティックを前後に倒して動かす（lamp_y = −K_XY × pitch、M4-H のピント合わせ）。"""
         roll = np.clip(x / K_XY, -ROLL_MAX, ROLL_MAX)
         spin = np.clip(z / C_Z, -SPIN_MAX, SPIN_MAX)
-        return roll, spin
+        pitch = -np.clip(y, -Y_MAX, Y_MAX) / K_XY
+        return roll, spin, pitch
 
-    def knob_pose(self, roll, spin):
-        """ジョイスティックを (roll, spin) にしたときのノブの位置と向き。
+    def knob_pose(self, roll, spin, pitch=0.0):
+        """ジョイスティックを (roll, spin, pitch) にしたときのノブの位置と向き。
         ジョイスティックは基台に付いているので、本体が動く分も含めて計算する。"""
         c, q = self.calc, self.q
         c.qpos[:] = self.model.qpos0
-        c.qpos[q["js_roll"]], c.qpos[q["js_spin"]] = roll, spin
+        c.qpos[q["js_roll"]], c.qpos[q["js_spin"]], c.qpos[q["js_pitch"]] = roll, spin, pitch
         c.qpos[q["lamp_x"]], c.qpos[q["lamp_z"]] = K_XY * roll, C_Z * spin  # 連動拘束と同じ関係
+        c.qpos[q["lamp_y"]] = -K_XY * pitch
         mujoco.mj_kinematics(self.model, c)
         return c.site_xpos[self.knob_site].copy(), c.site_xmat[self.knob_site].reshape(3, 3).copy()
 
-    def arm_target(self, roll, spin, iters=30):
-        """ノブを (roll, spin) にするためのアーム関節角を IK で求める（前回の解から出発）。"""
-        pos, mat = self.knob_pose(roll, spin)
+    def arm_target(self, roll, spin, pitch=0.0, iters=30):
+        """ノブを (roll, spin, pitch) にするためのアーム関節角を IK で求める（前回の解から出発）。"""
+        pos, mat = self.knob_pose(roll, spin, pitch)
         self.q_arm, e_pos, e_rot = self.ik.solve(pos, mat @ GRIP_FLIP, self.q_arm, iters=iters)
         return self.q_arm, e_pos, e_rot
 
     # ---------- 操作 ----------
-    def grasp(self, x=0.0, z=0.0):
-        """本体を (x, z)[m] に置いた状態で、アームをノブの位置へ直接置き、
+    def grasp(self, x=0.0, z=0.0, y=0.0):
+        """本体を (x, z, y)[m] に置いた状態で、アームをノブの位置へ直接置き、
         weld を ON にして「握った状態」にする（把持動作は省略）。"""
         m, d = self.model, self.data
-        roll, spin = self.lamp_to_joystick(x, z)
-        d.qpos[self.q["js_roll"]], d.qpos[self.q["js_spin"]] = roll, spin
+        roll, spin, pitch = self.lamp_to_joystick(x, z, y)
+        d.qpos[self.q["js_roll"]], d.qpos[self.q["js_spin"]], d.qpos[self.q["js_pitch"]] = roll, spin, pitch
         d.qpos[self.q["lamp_x"]], d.qpos[self.q["lamp_z"]] = K_XY * roll, C_Z * spin
+        d.qpos[self.q["lamp_y"]] = -K_XY * pitch
         # 手首の回転は「ハンドル角の逆向き＋一定のずれ」で決まるが、向きだけを見る IK には
         # 360°ずれた解も同じに見える。ハンドル0°の姿勢から連続につながる解を選ばないと、
         # 手首が可動範囲の端に寄り、少し回しただけで限界に当たる（M3：左眼で発見）。
         self.q_arm = Q_GUESS.copy()
-        self.arm_target(roll, 0.0, iters=300)
+        self.arm_target(roll, 0.0, pitch, iters=300)
         self.q_arm[WRIST] -= spin
-        q, e_pos, e_rot = self.arm_target(roll, spin, iters=300)
+        q, e_pos, e_rot = self.arm_target(roll, spin, pitch, iters=300)
         d.qpos[self.arm_qadr] = q
         d.ctrl[self.act] = q
         mujoco.mj_forward(m, d)
@@ -89,10 +94,10 @@ class SlitLampRobot:
         d.eq_active[self.weld] = 1
         return e_pos, e_rot
 
-    def command(self, x, z):
-        """本体を (x, z)[m] へ動かすように、アームのモーター目標を更新する。"""
-        roll, spin = self.lamp_to_joystick(x, z)
-        q, e_pos, e_rot = self.arm_target(roll, spin)
+    def command(self, x, z, y=0.0):
+        """本体を (x, z, y)[m] へ動かすように、アームのモーター目標を更新する。"""
+        roll, spin, pitch = self.lamp_to_joystick(x, z, y)
+        q, e_pos, e_rot = self.arm_target(roll, spin, pitch)
         self.data.ctrl[self.act] = q
         return e_pos, e_rot
 

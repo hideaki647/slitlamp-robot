@@ -25,7 +25,7 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
         path.append(err)
         lamp.append(env.target * 1000)
         closures.append(env.lid_closure)
-        if np.linalg.norm(err) < SUCCESS_MM:
+        if env.is_aligned(err):
             hold += 1
             if converged_at is None:
                 converged_at = t
@@ -39,7 +39,7 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
             images.append(obs)
             actions.append(action if label_policy is None else label_policy(obs, env))
             errors.append(err)
-        executed = action + rng.normal(0, noise_std_mm, 2) if noise_std_mm > 0 else action
+        executed = action + rng.normal(0, noise_std_mm, len(action)) if noise_std_mm > 0 else action
         obs = env.step(executed, on_substep=on_substep)
 
     final = env.error_mm()
@@ -69,6 +69,13 @@ def run_episode(env, policy, seed, max_steps=50, hold_steps=5, noise_std_mm=0.0,
         "steps": env.steps,
         **env.info,
     }
+    if len(path[0]) > 2:   # ピント合わせ（M4-H）：前後のずれ
+        ys = np.abs(np.array(path)[:, 2])
+        result.update({
+            "focus_away_first3": bool(len(ys) > 3 and ys[3] > ys[0]),   # 最初の3ステップで焦点から遠ざかったか
+            "final_focus_mm": float(ys[-1]),
+            "max_focus_mm": float(ys.max()),
+        })
     if getattr(env, "blink", None) in ("random", "eval"):
         result.update(blink_metrics(norms, np.array(lamp), np.array(closures)))
     if record:

@@ -29,7 +29,7 @@ OUT_DIR = ROOT / "data" / "demos"
 _env = None  # 各プロセスで1つだけ作る環境
 
 
-def _worker(seed, noise_std, max_steps, eye, out_dir, switch=False, blink=False):
+def _worker(seed, noise_std, max_steps, eye, out_dir, switch=False, blink=False, focus=False):
     global _env
     from expert.expert_policy import expert_action
     from learning.rollout import run_episode
@@ -39,6 +39,7 @@ def _worker(seed, noise_std, max_steps, eye, out_dir, switch=False, blink=False)
         # 両眼切替（M4-F）：目標の眼はランダム、反対の眼に合わせた状態から始め、両眼の間の距離もばらつかせる
         _env = (SlitLampEnv(eye_mode="both", start="switch", ipd_mm=(56, 72)) if switch
                 else SlitLampEnv(blink="random") if blink        # 瞬きあり（M4-E）：右眼、ランダムな時刻に瞬き
+                else SlitLampEnv(focus="back") if focus          # ピント合わせ（M4-H）：手前から奥へ押す
                 else SlitLampEnv(target_eye=eye))
     # hold_steps を max_steps より大きくして、途中で打ち切らず毎回 max_steps 分を記録する
     r = run_episode(_env, expert_action, seed, max_steps=max_steps, hold_steps=max_steps + 1,
@@ -58,11 +59,13 @@ def sample_grid(out_dir=OUT_DIR, name="m2_demo_samples.png", n=48, cols=8, scale
         t = rng.integers(len(d["actions"]))
         img = cv2.resize(d["images"][t], None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
         c = img.shape[0] // 2
-        ax, az = d["actions"][t]
+        ax, az = d["actions"][t][:2]   # ピント合わせのお手本（M4-H）は Δy も持つが、矢印は左右・上下だけ
         # 画像の右＝+x、上＝+z。1mm を 8画素で表示
         tip = (int(c + ax * 8), int(c - az * 8))
         cv2.drawMarker(img, (c, c), (0, 255, 0), cv2.MARKER_CROSS, 10, 1)
         cv2.arrowedLine(img, (c, c), tip, (255, 0, 0), 2, tipLength=0.3)
+        if len(d["actions"][t]) > 2:   # 前後の指令（奥へ押す＝＋）を数字で表示
+            cv2.putText(img, f"dy{d['actions'][t][2]:+.1f}", (2, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1)
         tiles.append(img)
     rows = [np.hstack(tiles[i:i + cols]) for i in range(0, n, cols)]
     path = ROOT / "outputs" / name
@@ -76,7 +79,10 @@ def main():
     p.add_argument("--noise_std", type=float, default=0.5, help="DART のノイズ [mm]")
     p.add_argument("--max_steps", type=int, default=12)
     p.add_argument("--workers", type=int, default=16)
+    p.add_argument("--start", type=int, default=0, help="この番号の患者から集める（途中で止まったときの再開用）")
     p.add_argument("--eye", default="R", choices=["R", "L"], help="合わせる眼（左眼なら data/demos_L に保存）")
+    p.add_argument("--focus", action="store_true",
+                   help="ピント合わせのお手本（M4-H）。手前に引いた状態から始める。data/demos_focus に保存")
     p.add_argument("--blink", action="store_true",
                    help="瞬きありのお手本（M4-E）。data/demos_blink に保存。--max_steps 30 を推奨")
     p.add_argument("--switch", action="store_true",
@@ -84,6 +90,7 @@ def main():
     args = p.parse_args()
     out_dir = (ROOT / "data" / "demos_switch" if args.switch
                else ROOT / "data" / "demos_blink" if args.blink
+               else ROOT / "data" / "demos_focus" if args.focus
                else OUT_DIR if args.eye == "R" else ROOT / "data" / "demos_L")
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -91,8 +98,11 @@ def main():
     ctx = mp.get_context("spawn")
     n = args.episodes
     with ProcessPoolExecutor(args.workers, mp_context=ctx) as ex:
-        results = list(ex.map(_worker, range(n), [args.noise_std] * n, [args.max_steps] * n,
-                              [args.eye] * n, [str(out_dir)] * n, [args.switch] * n, [args.blink] * n))
+        # 再開用：すでにあるファイルは飛ばし、抜けている番号だけ集める（16並列なので番号順にできるとは限らない）
+        seeds = [s for s in range(args.start, n) if not (out_dir / f"ep_{s:05d}.npz").exists()]
+        n = len(seeds)
+        results = list(ex.map(_worker, seeds, [args.noise_std] * n, [args.max_steps] * n,
+                              [args.eye] * n, [str(out_dir)] * n, [args.switch] * n, [args.blink] * n, [args.focus] * n))
     dt = time.time() - t0
 
     frames = sum(r["steps"] for r in results)
@@ -104,13 +114,16 @@ def main():
         "eye": args.eye,
         "switch": args.switch,
         "blink": args.blink,
+        "focus": args.focus,
         "reached_1mm_rate": float(np.mean([r["min_error_mm"] < 1.0 for r in results])),
         "seconds": round(dt, 1),
     }
-    (out_dir / "summary.json").write_text(json.dumps({"summary": summary, "episodes": results}, indent=1, default=float))
+    summary_name = "summary.json" if args.start == 0 else f"summary_from{args.start}.json"
+    (out_dir / summary_name).write_text(json.dumps({"summary": summary, "episodes": results}, indent=1, default=float))
     print(summary)
     grid = ("m4f_demo_samples_switch.png" if args.switch
             else "m4e_demo_samples_blink.png" if args.blink
+            else "m4h_demo_samples_focus.png" if args.focus
             else "m2_demo_samples.png" if args.eye == "R" else "m3_demo_samples_L.png")
     print("saved", sample_grid(out_dir, grid).relative_to(ROOT))
 

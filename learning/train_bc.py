@@ -58,6 +58,7 @@ def evaluate(net, imgs, acts, errs, goals, hist, bs=1024):
 
 
 def train(data, out, init=None, epochs=40, bs=256, lr=1e-3, flip=False, goal=False, stack=1):
+    """（指令の数は、お手本の actions の列の数で決まる。ピント合わせのお手本なら3つ、M4-H）"""
     """data のフォルダ群で学習し、out に重みを、out.json に学習の経過を保存する。
     flip=True なら、半分の画像を左右反転し、正解の Δx の符号を逆にして混ぜる（右眼の見え方 → 左眼の見え方）。
     goal=True なら「指示」（0=右眼、1=左眼）も入力する生徒を学習する（M4-F）。"""
@@ -67,7 +68,8 @@ def train(data, out, init=None, epochs=40, bs=256, lr=1e-3, flip=False, goal=Fal
     (ti, ta, te, tg, th), (vi, va, ve, vg, vh) = split_and_stack(load_episodes(data), stack=stack)
     print(f"train {len(ti)} frames / val {len(vi)} frames", flush=True)
 
-    config = {**({"goal_dim": 2} if goal else {}), **({"stack": stack} if stack > 1 else {})}
+    config = {**({"goal_dim": 2} if goal else {}), **({"stack": stack} if stack > 1 else {}),
+              **({"out_dim": ta.shape[1]} if ta.shape[1] != 2 else {})}
     net = StudentNet(**config)
     if init:
         net.load_state_dict(torch.load(init, map_location="cpu")["model"])
