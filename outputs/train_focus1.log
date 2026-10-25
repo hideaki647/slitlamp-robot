@@ -1,0 +1,44 @@
+ Container slitlamp_robot-sim-run-da9384278961 Creating 
+ Container slitlamp_robot-sim-run-da9384278961 Created 
+train 27000 frames / val 3000 frames
+epoch 1 train_loss 0.1491 val_err_mm 1.4839 val_err_near_mm 0.6023 val_err_far_mm 2.6784 seconds 38
+epoch 2 train_loss 0.1398 val_err_mm 1.5241 val_err_near_mm 0.7403 val_err_far_mm 2.5861 seconds 78
+epoch 3 train_loss 0.1148 val_err_mm 1.0215 val_err_near_mm 0.6451 val_err_far_mm 1.5313 seconds 115
+epoch 4 train_loss 0.0499 val_err_mm 0.7753 val_err_near_mm 0.4073 val_err_far_mm 1.2739 seconds 152
+epoch 5 train_loss 0.0367 val_err_mm 0.7356 val_err_near_mm 0.4571 val_err_far_mm 1.1128 seconds 197
+epoch 6 train_loss 0.0315 val_err_mm 0.6633 val_err_near_mm 0.3913 val_err_far_mm 1.0319 seconds 254
+epoch 7 train_loss 0.0283 val_err_mm 0.6679 val_err_near_mm 0.4136 val_err_far_mm 1.0123 seconds 310
+epoch 8 train_loss 0.0255 val_err_mm 0.5845 val_err_near_mm 0.3512 val_err_far_mm 0.9007 seconds 365
+epoch 9 train_loss 0.0234 val_err_mm 0.5606 val_err_near_mm 0.3189 val_err_far_mm 0.8881 seconds 420
+epoch 10 train_loss 0.0214 val_err_mm 0.5949 val_err_near_mm 0.4249 val_err_far_mm 0.8252 seconds 474
+epoch 11 train_loss 0.0190 val_err_mm 0.5161 val_err_near_mm 0.3523 val_err_far_mm 0.7379 seconds 530
+epoch 12 train_loss 0.0145 val_err_mm 0.4395 val_err_near_mm 0.3242 val_err_far_mm 0.5957 seconds 585
+epoch 13 train_loss 0.0113 val_err_mm 0.3840 val_err_near_mm 0.2887 val_err_far_mm 0.5131 seconds 639
+epoch 14 train_loss 0.0092 val_err_mm 0.3547 val_err_near_mm 0.2685 val_err_far_mm 0.4715 seconds 699
+epoch 15 train_loss 0.0085 val_err_mm 0.3451 val_err_near_mm 0.2594 val_err_far_mm 0.4612 seconds 753
+epoch 16 train_loss 0.0078 val_err_mm 0.3442 val_err_near_mm 0.2520 val_err_far_mm 0.4691 seconds 806
+epoch 17 train_loss 0.0074 val_err_mm 0.3378 val_err_near_mm 0.2439 val_err_far_mm 0.4650 seconds 863
+epoch 18 train_loss 0.0072 val_err_mm 0.3124 val_err_near_mm 0.2391 val_err_far_mm 0.4118 seconds 917
+epoch 19 train_loss 0.0066 val_err_mm 0.3213 val_err_near_mm 0.2499 val_err_far_mm 0.4181 seconds 971
+epoch 20 train_loss 0.0063 val_err_mm 0.3125 val_err_near_mm 0.2395 val_err_far_mm 0.4115 seconds 1027
+epoch 21 train_loss 0.0061 val_err_mm 0.2950 val_err_near_mm 0.2260 val_err_far_mm 0.3885 seconds 1082
+epoch 22 train_loss 0.0060 val_err_mm 0.2913 val_err_near_mm 0.2197 val_err_far_mm 0.3883 seconds 1136
+epoch 23 train_loss 0.0057 val_err_mm 0.2995 val_err_near_mm 0.2379 val_err_far_mm 0.3829 seconds 1190
+epoch 24 train_loss 0.0054 val_err_mm 0.2936 val_err_near_mm 0.2304 val_err_far_mm 0.3793 seconds 1245
+epoch 25 train_loss 0.0051 val_err_mm 0.2859 val_err_near_mm 0.2142 val_err_far_mm 0.3832 seconds 1298
+epoch 26 train_loss 0.0051 val_err_mm 0.2804 val_err_near_mm 0.2207 val_err_far_mm 0.3613 seconds 1352
+epoch 27 train_loss 0.0048 val_err_mm 0.2680 val_err_near_mm 0.2053 val_err_far_mm 0.3530 seconds 1405
+epoch 28 train_loss 0.0046 val_err_mm 0.2669 val_err_near_mm 0.2031 val_err_far_mm 0.3534 seconds 1458
+epoch 29 train_loss 0.0047 val_err_mm 0.2600 val_err_near_mm 0.1970 val_err_far_mm 0.3453 seconds 1513
+epoch 30 train_loss 0.0045 val_err_mm 0.2580 val_err_near_mm 0.1980 val_err_far_mm 0.3393 seconds 1567
+epoch 31 train_loss 0.0043 val_err_mm 0.2574 val_err_near_mm 0.1976 val_err_far_mm 0.3383 seconds 1622
+epoch 32 train_loss 0.0042 val_err_mm 0.2556 val_err_near_mm 0.1983 val_err_far_mm 0.3333 seconds 1676
+epoch 33 train_loss 0.0042 val_err_mm 0.2520 val_err_near_mm 0.1953 val_err_far_mm 0.3289 seconds 1729
+epoch 34 train_loss 0.0041 val_err_mm 0.2480 val_err_near_mm 0.1907 val_err_far_mm 0.3256 seconds 1783
+epoch 35 train_loss 0.0041 val_err_mm 0.2477 val_err_near_mm 0.1916 val_err_far_mm 0.3239 seconds 1838
+epoch 36 train_loss 0.0040 val_err_mm 0.2473 val_err_near_mm 0.1901 val_err_far_mm 0.3248 seconds 1892
+epoch 37 train_loss 0.0040 val_err_mm 0.2444 val_err_near_mm 0.1877 val_err_far_mm 0.3211 seconds 1948
+epoch 38 train_loss 0.0040 val_err_mm 0.2452 val_err_near_mm 0.1891 val_err_far_mm 0.3213 seconds 2002
+epoch 39 train_loss 0.0039 val_err_mm 0.2450 val_err_near_mm 0.1885 val_err_far_mm 0.3215 seconds 2058
+epoch 40 train_loss 0.0039 val_err_mm 0.2449 val_err_near_mm 0.1886 val_err_far_mm 0.3213 seconds 2112
+saved checkpoints/bc_focus1.pt
