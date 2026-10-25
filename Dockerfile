@@ -21,6 +21,8 @@ RUN apt-get update \
         libosmesa6 \
         libglib2.0-0 \
         ffmpeg \
+        # 提出動画の日本語字幕用（M5）
+        fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # PyTorch は CPU 版を専用サーバーから入れる（GPU版より大幅に小さい）
