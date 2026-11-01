@@ -4,7 +4,7 @@
 
 A robot arm grasps the joystick of a slit-lamp microscope and aligns it to the patient's pupil from camera images only, trained by imitation learning (BC + DAgger) in MuJoCo.
 
-- 動画：（公開後に記入）
+- 動画：https://youtu.be/y5pibef0mDA
 - レポート：[report/report.pdf](report/report.pdf)
 - **患者はすべて合成CG**です。実在の患者の画像・情報、人間の医師の操作データは使っていません。医療機器ではありません。
 
