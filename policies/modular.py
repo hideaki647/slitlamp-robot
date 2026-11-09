@@ -20,11 +20,11 @@ R_MIN_MM, R_MAX_MM = 1.2, 4.5   # 瞳孔の半径として認める範囲（ラ�
 _CLOSE = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
 
 
-def _candidates(g, thr):
+def _candidates(g, thr, px_per_mm=PX_PER_MM):
     """明るさ thr 以下の部分から、瞳孔らしい（大きさ・丸さが合う）かたまりを探す。"""
     mask = cv2.morphologyEx((g <= thr).astype(np.uint8), cv2.MORPH_CLOSE, _CLOSE)  # 白い反射点を埋める
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    r_min, r_max = R_MIN_MM * PX_PER_MM, R_MAX_MM * PX_PER_MM
+    r_min, r_max = R_MIN_MM * px_per_mm, R_MAX_MM * px_per_mm
     out = []
     h, w = g.shape
     for c in contours:
@@ -45,19 +45,20 @@ def _candidates(g, thr):
     return out
 
 
-def detect_pupil(img, step=3, max_shift_px=1.0, max_growth=1.6):
+def detect_pupil(img, step=3, max_shift_px=1.0, max_growth=1.6, px_per_mm=PX_PER_MM):
     """瞳孔の中心（画素の x, y）と半径（画素）を返す。見つからなければ None。
 
     しきい値を、画像のいちばん暗い値から少しずつ上げていき、同じかたまりを追いかける。
     瞳孔はまず暗い円として現れ、しきい値を上げると縁まで取れて中心が安定する。さらに上げると、
     虹彩の影の部分とつながって中心がずれたり、急に大きくなったりする。その直前の結果を使う。
     （1つのしきい値で決めると、明るい画像では虹彩ごと取り出す。M4-A で発見）
+    px_per_mm：1mm が何画素か（倍率を変えるとき、M6-②。既定はこれまでの細隙灯カメラの値）。
     """
     g = cv2.GaussianBlur(cv2.cvtColor(img, cv2.COLOR_RGB2GRAY), (3, 3), 0)
     lo, hi = int(g.min()), int(np.median(g))
     best = None
     for thr in range(lo + step, hi, step):
-        cands = _candidates(g, thr)
+        cands = _candidates(g, thr, px_per_mm)
         if best is None:
             if cands:
                 best = min(cands)    # 最初に現れた瞳孔らしいかたまり（複数なら、いちばん暗いもの）
@@ -73,15 +74,15 @@ def detect_pupil(img, step=3, max_shift_px=1.0, max_growth=1.6):
     return None if best is None else best[1:]
 
 
-def pupil_offset_mm(img):
+def pupil_offset_mm(img, px_per_mm=PX_PER_MM):
     """瞳孔の中心 − 画面の中央 を (x, z)[mm] で返す（先生の「ずれ」と同じ向き）。見つからなければ None。
     画像の右 = +x、画像の上 = +z（画素の y は下向きなので符号を逆にする）。"""
-    found = detect_pupil(img)
+    found = detect_pupil(img, px_per_mm=px_per_mm)
     if found is None:
         return None
     cx, cy, _ = found
     h, w = img.shape[:2]
-    return np.array([(cx - (w - 1) / 2) / PX_PER_MM, -(cy - (h - 1) / 2) / PX_PER_MM])
+    return np.array([(cx - (w - 1) / 2) / px_per_mm, -(cy - (h - 1) / 2) / px_per_mm])
 
 
 # 校正：検出した中心は、いつも左下へ約0.1・0.2mm ずれる（細隙光が右上から当たり、瞳孔の左下が暗く写るため）。
@@ -91,6 +92,7 @@ CALIB_OFFSET_MM = np.array([-0.096, -0.206])
 
 class ModularPolicy:
     """policy(obs, env=None) → 指令 (Δx, Δz)[mm]。env は見ない（画像だけで決める）。
+    ただし倍率（M6-②）は、ロボット自身が設定した値なので使う（env.px_per_mm。特権情報ではない）。
     calibrate=False なら校正なし（検出したままの位置を使う）。"""
 
     def __init__(self, calibrate=True):
@@ -100,7 +102,7 @@ class ModularPolicy:
 
     def __call__(self, obs, env=None):
         self.calls += 1
-        e = pupil_offset_mm(obs)
+        e = pupil_offset_mm(obs, getattr(env, "px_per_mm", PX_PER_MM))
         if e is None:                    # 見つからなければ動かない
             self.misses += 1
             return np.zeros(2)

@@ -37,6 +37,16 @@ FOCUS_TOL_MM = 0.5           # 前後のずれがこれ未満なら「ピント�
 BLUR_PX_PER_MM = 1.0         # 焦点からのずれ 1mm あたりのぼかしの広がり（ガウシアンの σ）[画素]
 BLUR_LEVELS = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)   # 作っておくぼかしの強さ [画素]。画素ごとに近いものを選ぶ
 
+# 倍率（M6-②、lamp="sl130" で mag を指定したときだけ）：Zeiss SL130 の仕様（10倍の接眼レンズ）
+MAGS = (5, 8, 12, 20, 32)
+FIELD_MM = {5: 40.0, 8: 25.0, 12: 17.0, 20: 10.0, 32: 6.0}   # 視野の直径 [mm]。5倍・32倍は仕様、間は「視野×倍率≒200」
+DRUM_DEG = {12: 0, 20: 60, 32: 120, 8: 240, 5: 300}         # 倍率ドラムの角度（scripts/make_sl130.py の目盛りと同じ）
+# 被写界深度：焦点からのずれによる眼の上でのぼけ [mm] は倍率によらず同じで、それが倍率に比例して拡大されて写る。
+# 12倍で焦点から ±0.2mm 以内なら「ほぼくっきり」（ぼけの σ が 0.5画素以下）になる強さにする
+SHARP_MM_12X = 0.2
+BLUR_MM_PER_MM = 0.5 / (SHARP_MM_12X * 96 / FIELD_MM[12])   # 焦点からのずれ 1mm あたりの、眼の上でのぼけ [mm]
+BLUR_LEVELS_MAG = (0.0, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0)   # 高倍率では大きくぼける
+
 # 汎化テスト用の「学習時に無かった条件」（M3）
 CONDITIONS = ["normal", "dark", "bright", "gray_iris", "head_far"]
 
@@ -53,7 +63,7 @@ DISTURB_DEFAULT = {
 
 class SlitLampEnv:
     def __init__(self, img_size=96, seed=None, target_eye="R", condition="normal", disturb=None,
-                 eye_mode=None, start="near", ipd_mm=None, blink=None, focus=None, lamp=None):
+                 eye_mode=None, start="near", ipd_mm=None, blink=None, focus=None, lamp=None, mag=None):
         """
         target_eye : 合わせる眼（"R"／"L"）。eye_mode="both" のときは患者ごとにランダム（M4-F）。
         start      : "near" = 目標の眼の近く ±15mm から（これまでと同じ）
@@ -66,10 +76,13 @@ class SlitLampEnv:
                      "front" = 焦点より 3〜8mm 奥（近づきすぎ）から始める。指令は (Δx, Δz, Δy) の3つになる
         lamp       : 細隙灯の見た目（M6）。None = これまでの簡単な形／"sl130" = Zeiss SL130 をモデルにした形
                      （models/scene_sl130.xml。重さ・動き・細隙灯カメラの画像はこれまでと同じ）
+        mag        : 倍率（M6-②、lamp="sl130" のときだけ）。None = これまでの見え方（視野約55mm）／
+                     5・8・12・20・32 = SL130 の視野の広さ・丸い視野・倍率に応じた被写界深度。set_mag() で途中で変えられる
         """
         assert blink in (None, "rest", "random", "eval"), blink
         assert focus in (None, "back", "front"), focus
         assert lamp in (None, "sl130"), lamp
+        assert mag is None or (lamp and mag in MAGS), mag
         self.blink, self.focus = blink, focus
         assert condition in CONDITIONS, condition
         assert start in ("near", "switch"), start
@@ -127,6 +140,13 @@ class SlitLampEnv:
             self.depth_renderer.enable_depth_rendering()
         self.target = np.zeros(2)  # 本体の目標位置 (x, z) [m]
         self.info = {}
+        # 倍率（M6-②）：細隙灯カメラの視野角と、丸い視野の外を黒くするための重み
+        self.mag0 = self.mag = mag
+        self.base_fovy = m.cam_fovy[self.ids["cam"]]
+        if mag:
+            yy, xx = np.mgrid[:img_size, :img_size] - (img_size - 1) / 2
+            self.field_mask = np.clip(img_size / 2 - np.hypot(xx, yy), 0, 1)[..., None]   # 縁は1画素でなめらかに
+            self.set_mag(mag)
 
     # ---------- リセット ----------
     def _randomize(self):
@@ -181,6 +201,8 @@ class SlitLampEnv:
         self.info.update({"goal_eye": self.goal_eye, "start": self.start_mode})
 
         mujoco.mj_resetData(self.model, self.data)
+        if self.mag0:
+            self.set_mag(self.mag0)              # 毎回、最初の倍率に戻す（ドラムの角度もリセットされるため）
         mujoco.mj_forward(self.model, self.data)
 
         # 光軸が瞳孔中心を通る本体位置（＝正解の位置）
@@ -258,6 +280,20 @@ class SlitLampEnv:
         """瞳孔が瞼で半分以上隠れているか（特権情報。先生が「待つ」かどうかの判断に使う）。"""
         return self.lid_closure > PUPIL_HIDDEN_AT
 
+    def set_mag(self, mag):
+        """倍率を変える（M6-②）：倍率ドラムをその角度に回し、細隙灯カメラの視野角を、
+        焦点の位置での視野の直径が FIELD_MM[mag] になるようにする。"""
+        assert mag in MAGS, mag
+        self.mag = mag
+        self.data.qpos[self.model.joint("mag_drum").qposadr[0]] = np.radians(DRUM_DEG[mag])
+        self.model.cam_fovy[self.ids["cam"]] = np.degrees(2 * np.arctan(FIELD_MM[mag] / 2000 / self.focus_dist))
+        self.info["mag"] = mag
+
+    @property
+    def px_per_mm(self):
+        """焦点の位置で 1mm が何画素に写るか。倍率を使わないときは、これまでの値（M4-A のモジュール型と同じ 1.85）。"""
+        return self.renderer.width / FIELD_MM[self.mag] if self.mag else 1.85
+
     def set_goal(self, eye):
         """診察の途中で目標の眼を変える（「次は左眼」の指示、M4-F の動画用）。"""
         self.goal_eye, self.goal = eye, (0 if eye == "R" else 1)
@@ -272,17 +308,23 @@ class SlitLampEnv:
         img = self.renderer.render()
         if self.focus:
             img = self._defocus(img)
+        if self.mag:
+            img = (img * self.field_mask).astype(np.uint8)   # 接眼レンズで見るような丸い視野
         return img
 
     def _defocus(self, img):
         """深度画像（カメラから各画素までの前後の距離）を使い、焦点からのずれが大きい画素ほど強くぼかす。
-        ボケの広がり σ = BLUR_PX_PER_MM × |距離 − 焦点距離|[mm]。強さの違うぼかしを数段階作り、画素ごとに選ぶ。"""
+        ボケの広がり σ = BLUR_PX_PER_MM × |距離 − 焦点距離|[mm]（倍率を使うときは BLUR_MM_PER_MM × 1mm あたりの画素数）。
+        強さの違うぼかしを数段階作り、画素ごとに選ぶ。"""
         self.depth_renderer.update_scene(self.data, camera="slit_cam", scene_option=self.scene_opt)
         depth = self.depth_renderer.render()
-        sigma = np.clip(BLUR_PX_PER_MM * np.abs(depth - self.focus_dist) * 1000, 0, BLUR_LEVELS[-1])
-        level = np.abs(sigma[..., None] - np.array(BLUR_LEVELS)).argmin(-1)
+        # 倍率を使うとき（M6-②）：眼の上でのぼけ [mm] × 1mm あたりの画素数＝画像の上でのぼけ [画素]
+        per_mm, levels = ((BLUR_MM_PER_MM * self.px_per_mm, BLUR_LEVELS_MAG) if self.mag
+                          else (BLUR_PX_PER_MM, BLUR_LEVELS))
+        sigma = np.clip(per_mm * np.abs(depth - self.focus_dist) * 1000, 0, levels[-1])
+        level = np.abs(sigma[..., None] - np.array(levels)).argmin(-1)
         out = img.copy()
-        for k, s in enumerate(BLUR_LEVELS):
+        for k, s in enumerate(levels):
             if s > 0 and (level == k).any():
                 out[level == k] = cv2.GaussianBlur(img, (0, 0), s)[level == k]
         return out
