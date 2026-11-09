@@ -53,7 +53,7 @@ DISTURB_DEFAULT = {
 
 class SlitLampEnv:
     def __init__(self, img_size=96, seed=None, target_eye="R", condition="normal", disturb=None,
-                 eye_mode=None, start="near", ipd_mm=None, blink=None, focus=None):
+                 eye_mode=None, start="near", ipd_mm=None, blink=None, focus=None, lamp=None):
         """
         target_eye : 合わせる眼（"R"／"L"）。eye_mode="both" のときは患者ごとにランダム（M4-F）。
         start      : "near" = 目標の眼の近く ±15mm から（これまでと同じ）
@@ -64,9 +64,12 @@ class SlitLampEnv:
         focus      : ピント合わせ（M4-H）。None = ボケなし・前後は動かさない（これまでと同じ）／
                      "back" = 焦点より 3〜8mm 手前（検者側）から始める（臨床でよく行う手順）／
                      "front" = 焦点より 3〜8mm 奥（近づきすぎ）から始める。指令は (Δx, Δz, Δy) の3つになる
+        lamp       : 細隙灯の見た目（M6）。None = これまでの簡単な形／"sl130" = Zeiss SL130 をモデルにした形
+                     （models/scene_sl130.xml。重さ・動き・細隙灯カメラの画像はこれまでと同じ）
         """
         assert blink in (None, "rest", "random", "eval"), blink
         assert focus in (None, "back", "front"), focus
+        assert lamp in (None, "sl130"), lamp
         self.blink, self.focus = blink, focus
         assert condition in CONDITIONS, condition
         assert start in ("near", "switch"), start
@@ -75,10 +78,15 @@ class SlitLampEnv:
         self.eye_mode, self.start_mode, self.ipd_mm = eye_mode, start, ipd_mm
         self.goal_eye = target_eye
         self.goal = 0 if target_eye == "R" else 1   # 生徒に渡す「指示」：0=右眼、1=左眼（M4-F）
-        self.model = mujoco.MjModel.from_xml_path(str(ROOT / "models" / "scene.xml"))
+        self.model = mujoco.MjModel.from_xml_path(str(ROOT / "models" / ("scene_sl130.xml" if lamp else "scene.xml")))
         self.data = mujoco.MjData(self.model)
         self.robot = SlitLampRobot(self.model, self.data)
         self.renderer = mujoco.Renderer(self.model, height=img_size, width=img_size)
+        # SL130 のとき、細隙灯カメラの画像は「これまでの形」で撮る：新しい部品（描画グループ2）を隠し、
+        # 隠してある今までの部品（グループ3）を表示する。部品の影が顔に落ちるので、こうしないと画像が変わる
+        self.scene_opt = mujoco.MjvOption()
+        if lamp:
+            self.scene_opt.geomgroup[2], self.scene_opt.geomgroup[3] = 0, 1
         self.rng = np.random.default_rng(seed)
         m = self.model
 
@@ -260,7 +268,7 @@ class SlitLampEnv:
     def observe(self):
         """細隙灯カメラの画像（img_size×img_size×3、uint8）。生徒AIが見るのはこれだけ。
         ピント合わせ（M4-H）のときは、焦点からのずれに応じて画素ごとにぼかす。"""
-        self.renderer.update_scene(self.data, camera="slit_cam")
+        self.renderer.update_scene(self.data, camera="slit_cam", scene_option=self.scene_opt)
         img = self.renderer.render()
         if self.focus:
             img = self._defocus(img)
@@ -269,7 +277,7 @@ class SlitLampEnv:
     def _defocus(self, img):
         """深度画像（カメラから各画素までの前後の距離）を使い、焦点からのずれが大きい画素ほど強くぼかす。
         ボケの広がり σ = BLUR_PX_PER_MM × |距離 − 焦点距離|[mm]。強さの違うぼかしを数段階作り、画素ごとに選ぶ。"""
-        self.depth_renderer.update_scene(self.data, camera="slit_cam")
+        self.depth_renderer.update_scene(self.data, camera="slit_cam", scene_option=self.scene_opt)
         depth = self.depth_renderer.render()
         sigma = np.clip(BLUR_PX_PER_MM * np.abs(depth - self.focus_dist) * 1000, 0, BLUR_LEVELS[-1])
         level = np.abs(sigma[..., None] - np.array(BLUR_LEVELS)).argmin(-1)
